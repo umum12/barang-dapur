@@ -1,0 +1,17 @@
+{
+  "name": "barang-dapur",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Barang Dapur — backend Google Apps Script + frontend ganda (GAS & GitHub Pages PWA)",
+  "scripts": {
+    "build": "node tools/build.js",
+    "test": "node tests/run-all.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1",
+    "sharp": "^0.35.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
