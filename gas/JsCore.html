@@ -1,0 +1,255 @@
+<script>
+// ===== JsCore.html — Konfigurasi, state, katalog item (dari backend), DOM refs, helper UI, session idle, modal, logout. =====
+
+// ===== DEVELOPMENT MODE (bypass login) =====
+// true  -> langsung masuk Dashboard sebagai Admin, login screen tidak ditampilkan.
+// false -> (saat login form diaktifkan kembali) memakai login kode akses normal.
+const DEVELOPMENT_MODE = false;
+const DEFAULT_ACCESS_CODE = 'ADMIN';
+const LONG_PRESS_MS = 600;
+const IDLE_MS = 30 * 60 * 1000;
+// Jumlah item utama yang langsung tampil di menu Input sebelum
+// tombol "Lihat Selengkapnya" ditekan. Ubah angka ini saja kalau
+// ke depan mau 4, 6, atau jumlah lain -- tidak perlu ubah logic.
+const INPUT_VISIBLE_COUNT = 4;
+// Jumlah transaksi Riwayat yang tampil sebelum "Lihat Selengkapnya" (backend mengirim seluruh transaksi bulan ini + bulan lalu).
+const RIWAYAT_VISIBLE_COUNT = 10;
+
+// Divisor konsumsi harian per item, dipakai untuk estimasi hari (stok / divisor).
+const CONSUMPTION_DIVISOR = {}; // diisi dari backend (ITEMS.consumptionDivisor) lewat applyStocks_()
+
+function estimasiHari_(key, stock) {
+  const divisor = CONSUMPTION_DIVISOR[key] || 1;
+  return Math.max(0, Math.round(Number(stock || 0) / divisor)); // stok minus -> 0 hari
+}
+
+// 4 level berdasarkan estimasi hari: AMAN (>10), WASPADA (5-10), MENIPIS (2-4), KRITIS (<=1).
+function hariLevel_(hari) {
+  const h = Number(hari || 0);
+  if (h <= 1) return { cls: 'danger', label: 'KRITIS' };
+  if (h <= 4) return { cls: 'orange', label: 'MENIPIS' };
+  if (h <= 10) return { cls: 'warning', label: 'WASPADA' };
+  return { cls: 'safe', label: 'AMAN' };
+}
+
+const state = {
+  user: null,
+  // stockReal = sumber kebenaran dari backend (dashboard strip selalu pakai ini).
+  stockReal: {},
+  // stockPreview = stock yang ditampilkan di kartu transaksi selama user mengetik,
+  // murni kalkulasi frontend, tidak pernah dikirim ke backend.
+  stockPreview: {},
+  recent: [],
+  mode: 'OUT',
+  txInputs: {},
+  invoice: null,
+  pendingPayload: null,
+  pendingDeleteTxId: null,
+  lastActivity: Date.now(),
+  idleTimer: null,
+  currentView: 'dashboard',
+  report: null,
+  // Menu Input: false = hanya tampilkan INPUT_VISIBLE_COUNT item utama.
+  txnExpanded: false,
+  // Waktu transaksi: null = "Sekarang" (server memakai jam saat simpan); selain itu {date:'yyyy-MM-dd', time:'HH:mm'}.
+  txTime: null,
+  // Riwayat: false = tampilkan RIWAYAT_VISIBLE_COUNT transaksi pertama saja.
+  riwayatExpanded: false,
+  // Riwayat dimuat saat menu dibuka (lazy). recentVersion naik tiap data berubah -> hasil muat yang usang dibuang.
+  recentLoaded: false,
+  recentLoading: false,
+  recentError: false,
+  recentVersion: 0,
+  // Diisi dari backend (getClientConfig_); nilai awal hanya fallback.
+  config: { backdateMaxDays: 7, maxQtyPerItem: 999 }
+};
+
+// Katalog item TIDAK lagi di-hardcode di frontend.
+// Sumber tunggal: ITEMS di Config.gs -> dikirim backend lewat `stocks` -> dipasang di sini.
+let itemOrder = [];
+const itemMeta = {};
+
+function applyStocks_(stocks) {
+  const list = Array.isArray(stocks) ? stocks : [];
+  itemOrder = list.map((c) => c.key);
+  state.stockReal = {};
+  list.forEach((c) => {
+    state.stockReal[c.key] = c.stock;
+    itemMeta[c.key] = { label: c.label, icon: c.icon, isSecondary: !!c.isSecondary };
+    CONSUMPTION_DIVISOR[c.key] = Number(c.divisor) || 1;
+  });
+}
+
+// Dashboard (dan hanya Dashboard) cuma menampilkan item primary -- item yang
+// estimasi harinya tidak relevan/tidak bisa diprediksi (isSecondary:true) tetap
+// ada di Input & Stok seperti biasa, sesuai keputusan Sprint 06.
+function primaryItemOrder() {
+  return itemOrder.filter((key) => !(itemMeta[key] && itemMeta[key].isSecondary));
+}
+
+const userName = document.getElementById('userName');
+const roleText = document.getElementById('roleText');
+const demoBanner = document.getElementById('demoBanner');
+const stockStrip = document.getElementById('stockStrip');
+const txnCard = document.getElementById('txnCard');
+const modeOutBtn = document.getElementById('modeOutBtn');
+const modeInBtn = document.getElementById('modeInBtn');
+const txnList = document.getElementById('txnList');
+const txnToggleBtn = document.getElementById('txnToggleBtn');
+const txnNoteInput = document.getElementById('txnNote');
+const txnTimeLabel = document.getElementById('txnTimeLabel');
+const txnTimeToggleBtn = document.getElementById('txnTimeToggleBtn');
+const txnTimePicker = document.getElementById('txnTimePicker');
+const txnDateInput = document.getElementById('txnDate');
+const txnTimeInput = document.getElementById('txnTimeInput');
+const txnTimeHint = document.getElementById('txnTimeHint');
+const invoiceField = document.getElementById('invoiceField');
+const invoiceInput = document.getElementById('invoiceInput');
+const invoicePickBtn = document.getElementById('invoicePickBtn');
+const invoicePreviewWrap = document.getElementById('invoicePreviewWrap');
+const invoicePreview = document.getElementById('invoicePreview');
+const invoiceRemoveBtn = document.getElementById('invoiceRemoveBtn');
+const txnSubmitBtn = document.getElementById('txnSubmitBtn');
+const txnSubmitLabel = document.getElementById('txnSubmitLabel');
+const txnSubmitSummary = document.getElementById('txnSubmitSummary');
+const recentList = document.getElementById('recentList');
+const riwayatToggleBtn = document.getElementById('riwayatToggleBtn');
+const topbarClock = document.getElementById('topbarClock');
+const refreshBtn = document.getElementById('refreshBtn');
+const refreshIcon = document.getElementById('refreshIcon');
+const logoutBtn = document.getElementById('logoutBtn');
+const loginView = document.getElementById('loginView');
+const appView = document.getElementById('appView');
+const loginCodeInput = document.getElementById('loginCodeInput');
+const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+const loginSubmitLabel = document.getElementById('loginSubmitLabel');
+const loginError = document.getElementById('loginError');
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalTitle = document.getElementById('modalTitle');
+const modalBody = document.getElementById('modalBody');
+const cancelModalBtn = document.getElementById('cancelModalBtn');
+const confirmModalBtn = document.getElementById('confirmModalBtn');
+const toast = document.getElementById('toast');
+const centerNotice = document.getElementById('centerNotice');
+
+// ----- Elemen multi-view & bottom nav -----
+const bottomNav = document.getElementById('bottomNav');
+const views = {
+  dashboard: document.getElementById('viewDashboard'),
+  input: document.getElementById('viewInput'),
+  stok: document.getElementById('viewStok'),
+  riwayat: document.getElementById('viewRiwayat'),
+  laporan: document.getElementById('viewLaporan')
+};
+const stokDetailList = document.getElementById('stokDetailList');
+const stokSubtitle = document.getElementById('stokSubtitle');
+
+// ----- Elemen modul Laporan -----
+const reportMonthSelect = document.getElementById('reportMonthSelect');
+const reportYearSelect = document.getElementById('reportYearSelect');
+const reportRenderBtn = document.getElementById('reportRenderBtn');
+const reportFormCard = document.getElementById('reportFormCard');
+const reportLoading = document.getElementById('reportLoading');
+const reportResultWrap = document.getElementById('reportResultWrap');
+const reportContent = document.getElementById('reportContent');
+const reportBackBtn = document.getElementById('reportBackBtn');
+const reportPrintBtn = document.getElementById('reportPrintBtn');
+const reportPdfBtn = document.getElementById('reportPdfBtn');
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function vibrateTiny() {
+  if (navigator.vibrate) {
+    try { navigator.vibrate(10); } catch (e) {}
+  }
+}
+
+// ===== SESSION IDLE TIMEOUT (murni frontend, tidak ada token/expiry dari backend) =====
+function setActivity() {
+  state.lastActivity = Date.now();
+}
+function startIdleWatcher() {
+  if (state.idleTimer) clearInterval(state.idleTimer);
+  state.idleTimer = setInterval(() => {
+    if (Date.now() - state.lastActivity > IDLE_MS) {
+      stopIdleWatcher();
+      showLogin_();
+      showToast('Sesi berakhir. Silakan masuk lagi.');
+    }
+  }, 15000);
+}
+function stopIdleWatcher() {
+  if (state.idleTimer) {
+    clearInterval(state.idleTimer);
+    state.idleTimer = null;
+  }
+}
+
+function showToast(text) {
+  toast.textContent = text;
+  toast.style.display = 'block';
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => {
+    toast.style.display = 'none';
+  }, 2200);
+}
+
+// Notifikasi besar di tengah layar (auto-dismiss, tidak menghalangi interaksi).
+// Dipakai khusus untuk momen "sambutan" seperti dashboard pertama kali siap,
+// bukan untuk pesan error/aksi rutin (itu tetap pakai showToast biasa).
+function showCenterNotice(text) {
+  centerNotice.textContent = text;
+  centerNotice.classList.add('show');
+  clearTimeout(showCenterNotice._t);
+  showCenterNotice._t = setTimeout(() => {
+    centerNotice.classList.remove('show');
+  }, 2800);
+}
+
+// Waktu modal terakhir dibuka; dipakai JsBoot untuk menahan "klik hantu" setelah long-press.
+let modalOpenedAt = 0;
+
+function openModal(content, title) {
+  modalOpenedAt = Date.now();
+  confirmModalBtn.style.display = '';
+  modalTitle.textContent = title || 'Konfirmasi';
+  modalBody.innerHTML = content;
+  modalBackdrop.style.display = 'flex';
+}
+
+function closeModal() {
+  modalBackdrop.style.display = 'none';
+  state.pendingPayload = null;
+  state.pendingDeleteTxId = null;
+  confirmModalBtn.classList.remove('btn-danger');
+  confirmModalBtn.classList.add('btn-primary');
+  confirmModalBtn.onclick = submit;
+}
+
+function askLogout_() {
+  openModal(`
+    <div style="font-size:0.875rem; color:#7a6a5d;">
+      Yakin ingin keluar dari aplikasi?
+    </div>
+  `, 'Konfirmasi Logout');
+
+  confirmModalBtn.textContent = 'OK';
+  confirmModalBtn.classList.remove('btn-danger');
+  confirmModalBtn.classList.add('btn-primary');
+  confirmModalBtn.onclick = doLogout_;
+}
+
+function doLogout_() {
+  closeModal();
+  state.user = null;
+  showLogin_();
+  showCenterNotice('Berhasil logout.');
+}
+</script>

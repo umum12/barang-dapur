@@ -1,0 +1,186 @@
+<script>
+// ===== JsBoot.html — Navigasi view, login, event binding, init(). WAJIB dimuat PALING AKHIR. =====
+
+// ===== NAVIGASI MULTI-VIEW (Dashboard / Input / Stok / Riwayat / Laporan) =====
+function switchView(viewKey) {
+  Object.keys(views).forEach((key) => {
+    if (!views[key]) return;
+    views[key].classList.toggle('hidden', key !== viewKey);
+  });
+  bottomNav.querySelectorAll('.nav-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === viewKey);
+  });
+  state.currentView = viewKey;
+  if (viewKey === 'riwayat' && !state.recentLoaded) loadRiwayat_();
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+}
+
+function init() {
+  if (DEVELOPMENT_MODE) {
+    // BYPASS LOGIN (Development Mode): langsung masuk Dashboard sebagai Admin.
+    // Login screen tidak ditampilkan. Session dianggap selalu aktif.
+    showApp_();
+    loadDashboard_(DEFAULT_ACCESS_CODE);
+    setActivity();
+    startIdleWatcher();
+    return;
+  }
+
+  // DEVELOPMENT_MODE = false -> login screen kode akses ditampilkan dahulu.
+  // loadDashboard_(kodeAksesUser) baru dipanggil setelah login() backend sukses.
+  showLogin_();
+}
+
+function showLogin_() {
+  stopIdleWatcher();
+  // Versi GitHub Pages: api-shim.js memasang kait ini untuk mencabut token sesi di server. Di GAS tidak ada -> tidak terjadi apa-apa.
+  if (typeof window.onBdSessionEnd === 'function') window.onBdSessionEnd();
+  appView.classList.add('hidden');
+  loginView.classList.remove('hidden');
+  loginError.classList.add('hidden');
+  loginCodeInput.value = '';
+  setTimeout(() => loginCodeInput.focus(), 50);
+}
+
+function showApp_() {
+  loginView.classList.add('hidden');
+  appView.classList.remove('hidden');
+}
+
+function attemptLogin_() {
+  const code = loginCodeInput.value.trim().toUpperCase();
+  if (!code) {
+    loginError.textContent = 'Kode akses wajib diisi.';
+    loginError.classList.remove('hidden');
+    return;
+  }
+
+  loginError.classList.add('hidden');
+  loginSubmitBtn.disabled = true;
+  loginSubmitLabel.innerHTML = '<span class="btn-spinner"></span> Memuat...';
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      loginSubmitBtn.disabled = false;
+      loginSubmitLabel.textContent = 'MASUK';
+
+      if (!res || !res.ok) {
+        loginError.textContent = (res && res.message) || 'Kode tidak ditemukan.';
+        loginError.classList.remove('hidden');
+        return;
+      }
+
+      showApp_();
+      hydrateDashboard(res);
+      setActivity();
+      startIdleWatcher();
+    })
+    .withFailureHandler((err) => {
+      loginSubmitBtn.disabled = false;
+      loginSubmitLabel.textContent = 'MASUK';
+      loginError.textContent = err && err.message ? err.message : 'Terjadi kesalahan. Periksa koneksi dan coba lagi.';
+      loginError.classList.remove('hidden');
+    })
+    .login(code);
+}
+
+function loadDashboard_(accessCode) {
+  google.script.run
+    .withSuccessHandler((res) => {
+      if (res && res.ok) {
+        hydrateDashboard(res);
+        return;
+      }
+      showToast('Gagal memuat dashboard.');
+    })
+    .withFailureHandler((err) => {
+      showToast(err && err.message ? err.message : 'Terjadi kesalahan.');
+    })
+    .getDashboard(accessCode);
+}
+
+modeOutBtn.addEventListener('click', () => setMode('OUT'));
+modeInBtn.addEventListener('click', () => setMode('IN'));
+invoicePickBtn.addEventListener('click', () => invoiceInput.click());
+invoiceInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  handleInvoiceFile(file);
+});
+invoiceRemoveBtn.addEventListener('click', () => {
+  state.invoice = null;
+  invoiceInput.value = '';
+  invoicePreviewWrap.classList.add('hidden');
+  renderTxnSection();
+});
+txnSubmitBtn.addEventListener('click', confirmTxnSubmit);
+txnToggleBtn.addEventListener('click', () => {
+  state.txnExpanded = !state.txnExpanded;
+  renderTxnSection();
+});
+refreshBtn.addEventListener('click', refreshDashboard);
+logoutBtn.addEventListener('click', askLogout_);
+loginCodeInput.addEventListener('input', (e) => {
+  const start = e.target.selectionStart;
+  const end = e.target.selectionEnd;
+  e.target.value = e.target.value.toUpperCase();
+  e.target.setSelectionRange(start, end);
+});
+loginCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') attemptLogin_();
+});
+loginSubmitBtn.addEventListener('click', attemptLogin_);
+// Setelah long-press, browser sentuh bisa mengirim klik susulan ke titik jari yang sama --
+// yang kini sudah tertutup modal (menutup popup / menekan tombol tanpa disengaja). Abaikan 0,5 dtk pertama.
+modalBackdrop.addEventListener('click', (e) => {
+  if (Date.now() - modalOpenedAt < 500) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, true);
+cancelModalBtn.addEventListener('click', closeModal);
+modalBackdrop.addEventListener('click', (e) => {
+  if (e.target === modalBackdrop) closeModal();
+});
+['pointerdown', 'keydown', 'touchstart'].forEach((ev) => {
+  document.addEventListener(ev, () => { if (state.user) setActivity(); }, { passive: true });
+});
+bottomNav.querySelectorAll('.nav-btn').forEach((btn) => {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+});
+reportRenderBtn.addEventListener('click', renderMonthlyReport_);
+reportBackBtn.addEventListener('click', backToReportForm_);
+reportPrintBtn.addEventListener('click', () => window.print());
+reportPdfBtn.addEventListener('click', () => window.print());
+
+// Keyboard-avoidance: iOS Safari (and some Android WebViews) don't reliably
+// resize/scroll the viewport when a focused input is near the bottom of a
+// scrollable panel or inside the modal. Nudge the focused field into view
+// after the keyboard animation settles instead of trusting layout alone.
+document.addEventListener('focusin', (e) => {
+  const el = e.target;
+  if (!el.matches('input, select, textarea')) return;
+  setTimeout(() => {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 300);
+});
+
+txnTimeToggleBtn.addEventListener('click', () => (state.txTime ? resetTxnTime_() : openTxnTimePicker_()));
+riwayatToggleBtn.addEventListener('click', () => {
+  state.riwayatExpanded = !state.riwayatExpanded;
+  renderRecent();
+});
+txnDateInput.addEventListener('change', onTxnTimeChanged_);
+txnTimeInput.addEventListener('change', onTxnTimeChanged_);
+
+// Versi GitHub Pages: server menolak token (habis/dicabut) -> kembali ke login. Di GAS event ini tidak pernah terjadi.
+window.addEventListener('bd:auth-expired', () => {
+  if (appView.classList.contains('hidden')) return; // sudah di halaman login
+  showLogin_();
+  showToast('Sesi berakhir. Silakan masuk lagi.');
+});
+
+updateTopbarClock_();
+setInterval(updateTopbarClock_, 1000);
+
+init();
+</script>

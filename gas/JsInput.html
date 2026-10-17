@@ -1,0 +1,419 @@
+<script>
+// ===== JsInput.html — Menu Input: qty, mode ambil/datang, invoice, submit, applyServerResult_. Bergantung: JsCore. =====
+
+function resetTxnState() {
+  state.mode = 'OUT';
+  state.txTime = null;
+  state.txInputs = {};
+  state.invoice = null;
+  itemOrder.forEach((k) => {
+    state.txInputs[k] = 0;
+  });
+  syncPreviewToReal_();
+  txnNoteInput.value = '';
+  invoiceInput.value = '';
+  invoicePreviewWrap.classList.add('hidden');
+}
+
+// stockPreview disamakan kembali dengan stockReal (dipanggil setiap kali
+// data asli dari backend datang, atau saat transaksi selesai/reset).
+function syncPreviewToReal_() {
+  state.stockPreview = { ...state.stockReal };
+}
+
+// Hitung ulang stockPreview murni di frontend berdasarkan input qty saat ini.
+// Tidak menyentuh backend / stockReal sama sekali.
+function recomputePreview_() {
+  const preview = { ...state.stockReal };
+  itemOrder.forEach((key) => {
+    const qty = Number(state.txInputs[key] || 0);
+    const base = Number(state.stockReal[key] || 0);
+    preview[key] = state.mode === 'IN' ? base + qty : base - qty; // boleh minus
+  });
+  state.stockPreview = preview;
+}
+
+function buildTxnRow(key) {
+  const meta = itemMeta[key];
+  // Kartu transaksi memakai stockPreview (real-time, hanya tampilan).
+  const previewStock = Number(state.stockPreview[key] || 0);
+  const qty = Number(state.txInputs[key] || 0);
+  const previewHari = estimasiHari_(key, previewStock);
+  const level = hariLevel_(previewHari);
+  const minusDisabled = qty <= 0;
+  const plusDisabled = qty >= state.config.maxQtyPerItem;
+  const activeClass = qty > 0 ? ' active-qty' : '';
+
+  return `
+    <div class="txn-row${activeClass}" data-key="${key}">
+      <div class="txn-row-top">
+        <span class="ico">${meta.icon}</span>
+        <div class="txn-info">
+          <span class="lbl">${escapeHtml(meta.label)}</span>
+          <div class="stock-now">Tersedia: <span class="stock-num ${level.cls}">${previewStock}</span>${previewStock < 0 ? '<span class="minus-hint">⚠ minus</span>' : ''}</div>
+        </div>
+      </div>
+      <div class="qty-row">
+        <button class="qty-btn" type="button" data-action="dec" data-key="${key}" ${minusDisabled ? 'disabled' : ''}>−</button>
+        <input class="qty-input" type="number" inputmode="numeric" min="0" value="${qty}" data-key="${key}" />
+        <button class="qty-btn" type="button" data-action="inc" data-key="${key}" ${plusDisabled ? 'disabled' : ''}>+</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTxnSection() {
+  modeOutBtn.classList.toggle('active', state.mode === 'OUT');
+  modeInBtn.classList.toggle('active', state.mode === 'IN');
+  txnCard.classList.toggle('dark', state.mode === 'IN');
+
+  recomputePreview_();
+
+  // [Poin 3] Tampilkan hanya INPUT_VISIBLE_COUNT item utama dahulu;
+  // sisanya muncul setelah tombol "Lihat Selengkapnya" ditekan.
+  const visibleItems = state.txnExpanded ? itemOrder : itemOrder.slice(0, INPUT_VISIBLE_COUNT);
+  const hasMore = itemOrder.length > INPUT_VISIBLE_COUNT;
+
+  txnList.innerHTML = visibleItems.map(buildTxnRow).join('');
+  bindQtyControls();
+
+  if (hasMore) {
+    txnToggleBtn.classList.remove('hidden');
+    txnToggleBtn.textContent = state.txnExpanded
+      ? '▲ Sembunyikan Item'
+      : `▼ Lihat Selengkapnya (${itemOrder.length - INPUT_VISIBLE_COUNT} lagi)`;
+  } else {
+    txnToggleBtn.classList.add('hidden');
+  }
+
+  const showInvoice = state.mode === 'IN';
+  invoiceField.classList.toggle('hidden', !showInvoice);
+
+  const selected = getSelectedTxnItems();
+  const total = selected.reduce((sum, it) => sum + it.qty, 0);
+  const invoiceOk = state.mode === 'OUT' || !!state.invoice;
+  const minusItems = selected.filter((it) => state.mode === 'OUT' && it.qty > Number(state.stockReal[it.key] || 0));
+
+  txnSubmitBtn.classList.toggle('mode-in', state.mode === 'IN');
+  txnSubmitBtn.disabled = total <= 0 || !invoiceOk || !isTxTimeValid_();
+
+  txnSubmitLabel.textContent = 'KIRIM';
+  txnSubmitSummary.textContent = total > 0
+    ? `${selected.length} Barang • Total ${total} Item` + (minusItems.length ? ` • ⚠ ${minusItems.length} jadi minus` : '')
+    : 'Pilih item dahulu';
+
+  renderTxnTime_();
+}
+
+function bindQtyControls() {
+  txnList.querySelectorAll('.qty-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const delta = btn.dataset.action === 'inc' ? 1 : -1;
+      changeTxnQty(key, delta, btn);
+    });
+  });
+
+  txnList.querySelectorAll('.qty-input').forEach((input) => {
+    input.addEventListener('change', (e) => {
+      const key = e.target.dataset.key;
+      let next = parseInt(e.target.value, 10);
+      if (isNaN(next) || next < 0) next = 0;
+      next = Math.min(next, state.config.maxQtyPerItem);
+      state.txInputs[key] = next;
+      renderTxnSection();
+    });
+    input.addEventListener('focus', (e) => e.target.select());
+  });
+}
+
+function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  state.txTime = null;
+  itemOrder.forEach((k) => {
+    state.txInputs[k] = 0;
+  });
+  state.invoice = null;
+  invoiceInput.value = '';
+  invoicePreviewWrap.classList.add('hidden');
+  renderTxnSection();
+}
+
+function changeTxnQty(key, delta, btnEl) {
+  let next = Number(state.txInputs[key] || 0) + delta;
+  if (next < 0) next = 0;
+  if (next > state.config.maxQtyPerItem) next = state.config.maxQtyPerItem;
+
+  if (next === Number(state.txInputs[key] || 0)) return;
+
+  state.txInputs[key] = next;
+  vibrateTiny();
+  renderTxnSection();
+
+  // Micro-interaction: pop animasi pada angka qty yang baru di-render.
+  const freshInput = txnList.querySelector(`.qty-input[data-key="${key}"]`);
+  if (freshInput) {
+    freshInput.classList.add('pop');
+    setTimeout(() => freshInput.classList.remove('pop'), 150);
+  }
+}
+
+function handleInvoiceFile(file) {
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 1280;
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round(height * (maxDim / width));
+          width = maxDim;
+        } else {
+          width = Math.round(width * (maxDim / height));
+          height = maxDim;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      const base64 = dataUrl.split(',')[1];
+
+      state.invoice = {
+        data: base64,
+        mimeType: 'image/jpeg',
+        filename: 'invoice.jpg'
+      };
+
+      invoicePreview.src = dataUrl;
+      invoicePreviewWrap.classList.remove('hidden');
+      renderTxnSection();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function getSelectedTxnItems() {
+  return itemOrder
+    .map((key) => ({ key, qty: Number(state.txInputs[key] || 0) }))
+    .filter((item) => item.qty > 0);
+}
+
+function confirmTxnSubmit() {
+  if (txnSubmitBtn.disabled) return;
+  const items = getSelectedTxnItems();
+  if (!items.length) return;
+  if (state.mode === 'IN' && !state.invoice) return;
+
+  const isIn = state.mode === 'IN';
+  const note = txnNoteInput.value.trim();
+
+  const lines = items.map((item) => `
+    <div style="display:flex; justify-content:space-between; gap:10px; font-size:0.875rem; margin-bottom:6px;">
+      <div>${escapeHtml(itemMeta[item.key].icon)} ${escapeHtml(itemMeta[item.key].label)}</div>
+      <strong>${isIn ? '+' : '-'}${item.qty}</strong>
+    </div>
+  `).join('');
+
+  const total = items.reduce((sum, item) => sum + item.qty, 0);
+
+  const txTimeIso = getTxTimePayload_();
+  const timeHtml = txTimeIso
+    ? `<div style="font-size:0.8125rem; color:#9a5b00; background:#fff4e5; border-radius:10px; padding:8px 10px;">🕒 Dicatat untuk: <strong>${escapeHtml(formatTxTimeLabel_(txTimeIso))}</strong></div>`
+    : '';
+  const minusList = isIn ? [] : items.filter((it) => it.qty > Number(state.stockReal[it.key] || 0));
+  const minusHtml = minusList.length
+    ? `<div style="font-size:0.8125rem; color:#b3271f; background:#fdecea; border-radius:10px; padding:8px 10px;">⚠️ Stok akan minus: ${minusList.map((it) => `${escapeHtml(itemMeta[it.key].label)} (${Number(state.stockReal[it.key] || 0) - it.qty})`).join(', ')}</div>`
+    : '';
+
+  openModal(`
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:0.875rem; color:#7a6a5d;">
+        ${isIn ? 'Konfirmasi stok masuk.' : 'Pastikan data sudah benar.'}
+      </div>
+      <div>${lines}</div>
+      ${timeHtml}${minusHtml}
+      ${note ? `<div style="font-size:0.8125rem; color:#7a6a5d;">Keterangan: ${escapeHtml(note)}</div>` : ''}
+      <div style="display:flex; justify-content:space-between; font-weight:800; border-top:1px solid #ebe3da; padding-top:10px;">
+        <span>Total</span><span>${total}</span>
+      </div>
+    </div>
+  `, 'Konfirmasi');
+
+  confirmModalBtn.textContent = 'OK';
+  confirmModalBtn.classList.remove('btn-danger');
+  confirmModalBtn.classList.add('btn-primary');
+  confirmModalBtn.onclick = submit;
+
+  state.pendingPayload = {
+    accessCode: state.user ? state.user.code : '',
+    items,
+    note,
+    mode: state.mode,
+    txTime: txTimeIso,
+    invoice: isIn ? state.invoice : undefined
+  };
+}
+
+// Dipanggil setelah transaksi ATAU hapus transaksi berhasil di backend.
+// stockReal diperbarui dari hasil backend, dashboard di-fade, preview disamakan kembali.
+function applyServerResult_(res) {
+  if (Array.isArray(res.recent)) {
+    // Edit/hapus (dari Riwayat): backend langsung mengirim daftar terbaru.
+    state.recent = res.recent;
+    state.recentVersion++;
+    state.recentLoaded = true;
+    state.recentError = false;
+  } else {
+    // Simpan/koreksi: daftar riwayat jadi usang; dimuat ulang saat menu Riwayat dibuka.
+    invalidateRiwayat_();
+  }
+  applyStocks_(res.stocks);
+  syncPreviewToReal_();
+  renderStockStrip(true);
+  renderRecent();
+  renderStokDetail();
+}
+
+function applyTxnResult(res) {
+  applyServerResult_(res);
+  resetTxnState();
+  renderTxnSection();
+  showCenterNotice(res.message || 'Transaksi berhasil.');
+}
+
+function submit() {
+  if (!state.pendingPayload) return;
+  const payload = state.pendingPayload;
+
+  confirmModalBtn.disabled = true;
+  confirmModalBtn.innerHTML = '<span class="btn-spinner"></span> Menyimpan...';
+
+  const call = google.script.run
+    .withSuccessHandler((res) => {
+      confirmModalBtn.disabled = false;
+      confirmModalBtn.textContent = 'OK';
+
+      if (!res || !res.ok) {
+        closeModal();
+        showCenterNotice((res && res.message) || 'Gagal menyimpan.');
+        return;
+      }
+
+      closeModal();
+      applyTxnResult(res);
+    })
+    .withFailureHandler((err) => {
+      confirmModalBtn.disabled = false;
+      confirmModalBtn.textContent = 'OK';
+      closeModal();
+      showCenterNotice(err && err.message ? err.message : 'Terjadi kesalahan.');
+    });
+
+  if (payload.mode === 'IN') {
+    call.addStock({
+      accessCode: payload.accessCode,
+      items: payload.items,
+      note: payload.note,
+      txTime: payload.txTime,
+      invoice: payload.invoice
+    });
+  } else {
+    call.submitTransaction({
+      accessCode: payload.accessCode,
+      items: payload.items,
+      note: payload.note,
+      txTime: payload.txTime
+    });
+  }
+}
+
+// ===== Waktu transaksi (susulan) =====
+function pad2_(n) { return String(n).padStart(2, '0'); }
+function toDateInputValue_(d) { return `${d.getFullYear()}-${pad2_(d.getMonth() + 1)}-${pad2_(d.getDate())}`; }
+function toTimeInputValue_(d) { return `${pad2_(d.getHours())}:${pad2_(d.getMinutes())}`; }
+
+function parseTxIso_(iso) {
+  const [d, t] = String(iso).split('T');
+  const [y, m, dd] = d.split('-').map(Number);
+  const [hh, mm] = t.split(':').map(Number);
+  return new Date(y, m - 1, dd, hh, mm);
+}
+
+// null = "Sekarang" (backend memakai jam saat simpan).
+function getTxTimePayload_() {
+  const t = state.txTime;
+  return t && t.date && t.time ? `${t.date}T${t.time}` : null;
+}
+
+function formatTxTimeLabel_(iso) {
+  const d = parseTxIso_(iso);
+  return `${dayGroupLabel_(d)} • ${formatJam_(d)}`;
+}
+
+function txTimeMin_() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - state.config.backdateMaxDays);
+}
+
+// Validasi sisi klien (UX saja; validasi sah tetap di backend resolveTxTime_).
+function isTxTimeValid_() {
+  if (!state.txTime) return true;
+  const iso = getTxTimePayload_();
+  if (!iso) return false;
+  const d = parseTxIso_(iso);
+  return d.getTime() >= txTimeMin_().getTime() && d.getTime() <= Date.now() + 2 * 60000;
+}
+
+function openTxnTimePicker_() {
+  const now = new Date();
+  txnDateInput.min = toDateInputValue_(txTimeMin_());
+  txnDateInput.max = toDateInputValue_(now);
+  txnDateInput.value = toDateInputValue_(now);
+  txnTimeInput.value = toTimeInputValue_(now);
+  state.txTime = { date: txnDateInput.value, time: txnTimeInput.value };
+  renderTxnSection();
+}
+
+function resetTxnTime_() {
+  state.txTime = null;
+  renderTxnSection();
+}
+
+function onTxnTimeChanged_() {
+  state.txTime = { date: txnDateInput.value, time: txnTimeInput.value };
+  renderTxnSection();
+}
+
+function renderTxnTime_() {
+  const custom = !!state.txTime;
+  txnTimePicker.classList.toggle('hidden', !custom);
+  txnTimeToggleBtn.textContent = custom ? 'Pakai Sekarang' : 'Ubah';
+
+  if (!custom) {
+    txnTimeLabel.textContent = 'Sekarang (otomatis)';
+    txnTimeHint.classList.add('hidden');
+    return;
+  }
+
+  const iso = getTxTimePayload_();
+  txnTimeLabel.textContent = iso ? formatTxTimeLabel_(iso) : 'Lengkapi tanggal & jam';
+  const ok = isTxTimeValid_();
+  txnTimeHint.textContent = ok
+    ? `Transaksi susulan maksimal ${state.config.backdateMaxDays} hari ke belakang.`
+    : `Waktu harus antara ${state.config.backdateMaxDays} hari lalu s.d. sekarang.`;
+  txnTimeHint.classList.toggle('err', !ok);
+  txnTimeHint.classList.remove('hidden');
+}
+</script>

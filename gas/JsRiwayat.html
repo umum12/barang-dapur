@@ -1,0 +1,479 @@
+<script>
+// ===== JsRiwayat.html — Riwayat transaksi, format tanggal, long-press hapus. Bergantung: JsCore. =====
+
+const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', "Jum'at", 'Sabtu'];
+const BULAN_ID = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const BULAN_PANJANG_ID = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+// Parse "dd/MM/yyyy HH:mm:ss" (format dari backend formatDate_) jadi Date object.
+function parseTxTimestamp_(raw) {
+  const str = String(raw || '');
+  const m = str.match(/^(\d{2})\/(\d{2})\/(\d{4})[ ,]+(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, dd, mm, yyyy, hh, min] = m;
+  return new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min));
+}
+
+function isSameDay_(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// Format seragam "dddd, dd mmmm yyyy" (mis. Sabtu, 03 Oktober 2026) -- tanpa label relatif.
+function dayGroupLabel_(date) {
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${HARI_ID[date.getDay()]}, ${dd} ${BULAN_PANJANG_ID[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+function formatJam_(date) {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function buildItemBadges_(itemsJson) {
+  let items = [];
+  try { items = itemsJson ? JSON.parse(itemsJson) : []; } catch (e) { items = []; }
+  return items
+    .filter((it) => Number(it.qty || 0) > 0)
+    .map((it) => {
+      const icon = itemMeta[it.key] ? itemMeta[it.key].icon : '•';
+      return `<span class="item-badge">${icon}×${it.qty}</span>`;
+    })
+    .join('');
+}
+
+function buildRecentHtml_(transactions, withGroupHeader) {
+  if (!transactions.length) {
+    return '<div class="summary-empty"><span class="empty-ico">🗒️</span><span>Belum ada transaksi.</span></div>';
+  }
+
+  let html = '';
+  let lastGroupKey = null;
+  let groupIdx = -1;
+
+  transactions.forEach((tx) => {
+    const date = parseTxTimestamp_(tx.timestamp) || new Date();
+
+    if (withGroupHeader) {
+      const groupKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      if (groupKey !== lastGroupKey) {
+        if (lastGroupKey !== null) html += '</div>';
+        groupIdx++;
+        // tone-0 / tone-1 bergantian: hari yang berdampingan selalu berbeda warna.
+        html += `<div class="recent-day tone-${groupIdx % 2}"><div class="recent-day-hdr">${escapeHtml(dayGroupLabel_(date))}</div>`;
+        lastGroupKey = groupKey;
+      }
+    }
+
+    const isRestock = tx.type === 'MASUK';
+    const isKoreksi = tx.type === 'KOREKSI';
+    let actionLabel, actionClass;
+    if (isKoreksi) {
+      actionLabel = 'KOREKSI';
+      actionClass = 'koreksi';
+    } else {
+      actionLabel = isRestock ? 'DATANG' : 'AMBIL';
+      actionClass = isRestock ? 'in' : 'out';
+    }
+    const badges = isKoreksi
+      ? `<span class="item-badge">${escapeHtml(tx.itemsText || '')}</span>`
+      : buildItemBadges_(tx.itemsJson);
+    const noteHtml = tx.note ? `<div class="recent-note">📝 ${escapeHtml(tx.note)}</div>` : '';
+    const cameraHtml = isRestock && tx.invoiceUrl
+      ? `<a href="${escapeHtml(tx.invoiceUrl)}" target="_blank" rel="noopener" class="recent-camera">📷</a>`
+      : '';
+
+    html += `
+      <div class="recent-item fade-in${isRestock ? ' restock' : ''}${isKoreksi ? ' koreksi' : ''}" data-tx-id="${escapeHtml(tx.txId || '')}">
+        <div class="recent-row1">
+          <span class="recent-name">${escapeHtml(tx.userName || tx.userCode || '')}</span>
+          <span class="recent-role-badge">${escapeHtml(tx.role || '')}</span>
+              ${tx.backdated ? '<span class="recent-susulan">SUSULAN</span>' : ''}
+              ${tx.edited ? '<span class="recent-edited">DIEDIT</span>' : ''}
+          <span class="recent-time">${formatJam_(date)}</span>
+        </div>
+        <div class="recent-row2">
+          <div class="recent-badges">${badges}</div>
+          <span class="recent-action ${actionClass}">${actionLabel}</span>
+        </div>
+        ${noteHtml}${tx.backdated && tx.createdAt ? `<div class="recent-note">🕒 Dicatat: ${escapeHtml(tx.createdAt)}</div>` : ''}${tx.edited ? `<div class="recent-note">${escapeHtml(String(tx.editInfo).split(' | ').pop())}</div>` : ''}
+        ${cameraHtml}
+      </div>
+    `;
+  });
+
+  if (lastGroupKey !== null) html += '</div>';
+  return html;
+}
+
+// ===== Riwayat dimuat saat menu dibuka (lazy) =====
+function invalidateRiwayat_() {
+  state.recentVersion++;
+  state.recentLoaded = false;
+  state.recentError = false;
+}
+
+function resetRiwayat_() {
+  state.recent = [];
+  state.riwayatExpanded = false;
+  invalidateRiwayat_();
+}
+
+function loadRiwayat_() {
+  if (state.recentLoading || !state.user) return;
+  state.recentLoading = true;
+  state.recentError = false;
+  const ver = state.recentVersion;
+  renderRecent();
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      state.recentLoading = false;
+      if (ver !== state.recentVersion) {
+        // Data berubah selagi memuat -> hasil ini usang; muat ulang bila masih di Riwayat.
+        if (state.currentView === 'riwayat' && !state.recentLoaded) loadRiwayat_();
+        return;
+      }
+      if (!res || !res.ok) {
+        state.recentError = true;
+        renderRecent();
+        return;
+      }
+      state.recent = Array.isArray(res.recent) ? res.recent : [];
+      state.recentLoaded = true;
+      renderRecent();
+    })
+    .withFailureHandler(() => {
+      state.recentLoading = false;
+      if (ver !== state.recentVersion) return;
+      state.recentError = true;
+      renderRecent();
+    })
+    .getRiwayat(state.user.code);
+}
+
+function renderRecent() {
+  if (!state.recentLoaded) {
+    riwayatToggleBtn.classList.add('hidden');
+    if (state.recentError) {
+      recentList.innerHTML = '<div class="summary-empty"><span class="empty-ico">⚠️</span><span>Gagal memuat riwayat.</span><button type="button" class="small-link" id="riwayatRetryBtn">Coba lagi</button></div>';
+      document.getElementById('riwayatRetryBtn').addEventListener('click', loadRiwayat_);
+    } else {
+      recentList.innerHTML = '<div class="report-loading"><div class="report-spinner"></div><div class="subtle" style="margin-top:10px;">Memuat riwayat...</div></div>';
+    }
+    return;
+  }
+  // Riwayat: backend mengirim transaksi bulan ini + bulan lalu; tampilkan RIWAYAT_VISIBLE_COUNT dulu,
+  // sisanya muncul setelah "Lihat Selengkapnya". Dikelompokkan per hari (warna bergantian).
+  const all = state.recent;
+  const hasMore = all.length > RIWAYAT_VISIBLE_COUNT;
+  const visible = state.riwayatExpanded ? all : all.slice(0, RIWAYAT_VISIBLE_COUNT);
+
+  recentList.innerHTML = buildRecentHtml_(visible, true);
+  bindRecentLongPress(recentList);
+
+  riwayatToggleBtn.classList.toggle('hidden', !hasMore);
+  riwayatToggleBtn.textContent = state.riwayatExpanded
+    ? '▲ Sembunyikan Item'
+    : `▼ Lihat Selengkapnya (${all.length - RIWAYAT_VISIBLE_COUNT} lagi)`;
+}
+
+function bindRecentLongPress(container) {
+  if (!container) return;
+  container.querySelectorAll('.recent-item').forEach((el) => {
+    let pressTimer = null;
+    let triggered = false;
+
+    const start = (e) => {
+      // Jangan trigger long-press kalau menekan link invoice, atau saat akun read-only (Demo).
+      if (e.target.closest('a')) return;
+      if (state.user && state.user.canSubmit === false) return;
+      triggered = false;
+      el.classList.add('pressing');
+      pressTimer = setTimeout(() => {
+        triggered = true;
+        el.classList.remove('pressing');
+        vibrateTiny();
+        const txId = el.dataset.txId;
+        if (txId) {
+        try { openTxActions_(txId, el); }
+        catch (err) { showCenterNotice('Gagal membuka menu: ' + (err && err.message ? err.message : err)); }
+      }
+      }, LONG_PRESS_MS);
+    };
+
+    const cancel = () => {
+      clearTimeout(pressTimer);
+      el.classList.remove('pressing');
+      // Jari diangkat setelah long-press: mulai ulang jendela perisai klik hantu (lihat JsBoot).
+      if (triggered) modalOpenedAt = Date.now();
+    };
+
+    el.addEventListener('mousedown', start);
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('mouseup', cancel);
+    el.addEventListener('mouseleave', cancel);
+    el.addEventListener('touchend', cancel);
+    el.addEventListener('touchmove', cancel);
+    el.addEventListener('contextmenu', (e) => e.preventDefault()); // cegah menu/seleksi bawaan saat tahan
+    el.addEventListener('click', (e) => {
+      if (triggered) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    });
+  });
+}
+
+function askDeleteTransaction(txId, el) {
+  const preview = el ? el.innerHTML : '';
+
+  openModal(`
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:0.875rem; color:#7a6a5d;">
+        Hapus transaksi ini? Stok akan disesuaikan kembali secara otomatis.
+      </div>
+      <div style="font-size:0.8125rem; background:#faf6f1; border-radius:12px; padding:10px 12px;">${preview}</div>
+    </div>
+  `, 'Hapus Transaksi');
+
+  confirmModalBtn.textContent = 'Hapus';
+  confirmModalBtn.classList.remove('btn-primary');
+  confirmModalBtn.classList.add('btn-danger');
+  confirmModalBtn.onclick = () => submitDeleteTransaction(txId);
+
+  state.pendingDeleteTxId = txId;
+}
+
+function submitDeleteTransaction(txId) {
+  confirmModalBtn.disabled = true;
+  confirmModalBtn.innerHTML = '<span class="btn-spinner"></span> Menghapus...';
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      confirmModalBtn.disabled = false;
+
+      if (!res || !res.ok) {
+        closeModal();
+        showCenterNotice((res && res.message) || 'Gagal menghapus.');
+        return;
+      }
+
+      closeModal();
+      applyServerResult_(res);
+      renderTxnSection();
+      showCenterNotice(res.message || 'Transaksi dihapus.');
+    })
+    .withFailureHandler((err) => {
+      confirmModalBtn.disabled = false;
+      closeModal();
+      showCenterNotice(err && err.message ? err.message : 'Terjadi kesalahan.');
+    })
+    .deleteTransaction({
+      accessCode: state.user ? state.user.code : '',
+      txId
+    });
+}
+
+// ===== Aksi transaksi: Edit / Hapus (long-press di Riwayat) =====
+let editCtx = null;
+
+function canManageTx_(tx) {
+  const u = state.user;
+  if (!u) return false;
+  return String(u.role || '').toUpperCase() === 'ADMIN'
+    || String(tx.userCode || '').trim().toUpperCase() === String(u.code || '').trim().toUpperCase();
+}
+
+function openTxActions_(txId, el) {
+  const sameId = (a, b) => String(a).trim().toUpperCase() === String(b).trim().toUpperCase();
+  const tx = state.recent.find((t) => sameId(t.txId, txId));
+  if (!tx) {
+    showCenterNotice('Transaksi tidak ditemukan di daftar. Tekan refresh lalu coba lagi.');
+    return;
+  }
+  if (tx.type === 'KOREKSI') {
+    showCenterNotice('Transaksi koreksi stok tidak dapat diubah atau dihapus. Lakukan koreksi baru bila perlu.');
+    return;
+  }
+  if (!canManageTx_(tx)) {
+    showCenterNotice('Anda hanya bisa mengubah transaksi milik sendiri.');
+    return;
+  }
+
+  const preview = el ? el.innerHTML : '';
+  openModal(`
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:0.8125rem; background:#faf6f1; border-radius:12px; padding:10px 12px;">${preview}</div>
+      <button type="button" class="btn btn-primary" id="txActEditBtn">✏️ Edit Transaksi</button>
+      <button type="button" class="btn btn-danger" id="txActDeleteBtn">🗑️ Hapus Transaksi</button>
+    </div>
+  `, 'Transaksi');
+  confirmModalBtn.style.display = 'none';
+  document.getElementById('txActEditBtn').onclick = () => askEditTransaction_(tx);
+  document.getElementById('txActDeleteBtn').onclick = () => askDeleteTransaction(txId, el);
+}
+
+function askEditTransaction_(tx) {
+  let parsed = [];
+  try { parsed = JSON.parse(tx.itemsJson || '[]'); } catch (e) { parsed = []; }
+  const orig = {};
+  itemOrder.forEach((k) => { orig[k] = 0; });
+  parsed.forEach((it) => { if (orig[it.key] !== undefined) orig[it.key] = Number(it.qty || 0); });
+
+  const d = parseTxTimestamp_(tx.timestamp) || new Date();
+  editCtx = {
+    tx,
+    isIn: tx.type === 'MASUK',
+    orig,
+    qty: { ...orig },
+    origDate: toDateInputValue_(d),
+    origTime: toTimeInputValue_(d)
+  };
+
+  const rows = itemOrder.map((key) => {
+    const meta = itemMeta[key];
+    return `
+      <div class="edit-row" data-key="${key}">
+        <span class="edit-ico">${meta.icon}</span>
+        <div class="edit-info">
+          <div class="edit-lbl">${escapeHtml(meta.label)}</div>
+          <div class="edit-proj" id="editProj_${key}"></div>
+        </div>
+        <div class="qty-row">
+          <button type="button" class="qty-btn edit-qty-btn" data-action="dec" data-key="${key}">−</button>
+          <input class="qty-input edit-qty-input" type="number" inputmode="numeric" min="0" value="${orig[key]}" data-key="${key}" />
+          <button type="button" class="qty-btn edit-qty-btn" data-action="inc" data-key="${key}">+</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  openModal(`
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      <div style="font-size:0.75rem; color:#7a6a5d;">
+        <strong>${editCtx.isIn ? 'DATANG' : 'AMBIL'}</strong> • dicatat oleh ${escapeHtml(tx.userName || tx.userCode || '')}
+        ${editCtx.isIn && tx.invoiceUrl ? ' • foto invoice tidak berubah' : ''}
+      </div>
+      <div>${rows}</div>
+      <div class="field" style="margin-bottom:0;">
+        <label for="editNoteInput">📝 Keterangan</label>
+        <input id="editNoteInput" class="note-input" type="text" maxlength="50" value="${escapeHtml(tx.note || '')}" placeholder="opsional..." />
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>🕒 Waktu Transaksi</label>
+        <div class="txn-time-picker" style="margin-top:0;">
+          <input type="date" id="editDateInput" class="note-input" max="${toDateInputValue_(new Date())}" value="${editCtx.origDate}" />
+          <input type="time" id="editTimeInput" class="note-input" value="${editCtx.origTime}" />
+        </div>
+        <div class="txn-time-hint">Ubah hanya bila perlu. Perubahan waktu maksimal ${state.config.backdateMaxDays} hari ke belakang.</div>
+      </div>
+      <div id="editTxError" class="login-error hidden" style="margin-top:0;"></div>
+    </div>
+  `, '✏️ Edit Transaksi');
+
+  confirmModalBtn.textContent = 'Simpan Perubahan';
+  confirmModalBtn.classList.remove('btn-danger');
+  confirmModalBtn.classList.add('btn-primary');
+  confirmModalBtn.onclick = submitEditTransaction_;
+
+  modalBody.querySelectorAll('.edit-qty-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      setEditQty_(key, editCtx.qty[key] + (btn.dataset.action === 'inc' ? 1 : -1));
+    });
+  });
+  modalBody.querySelectorAll('.edit-qty-input').forEach((inp) => {
+    inp.addEventListener('change', () => setEditQty_(inp.dataset.key, parseInt(inp.value, 10)));
+    inp.addEventListener('focus', () => inp.select());
+  });
+  itemOrder.forEach(refreshEditRow_);
+}
+
+function setEditQty_(key, n) {
+  let next = Number(n);
+  if (isNaN(next) || next < 0) next = 0;
+  next = Math.min(next, state.config.maxQtyPerItem);
+  editCtx.qty[key] = next;
+  const input = modalBody.querySelector(`.edit-qty-input[data-key="${key}"]`);
+  if (input) input.value = next;
+  refreshEditRow_(key);
+}
+
+// Tandai baris yang berisi + tampilkan proyeksi stok bila qty berbeda dari semula.
+function refreshEditRow_(key) {
+  const q = editCtx.qty[key];
+  const o = editCtx.orig[key];
+  const row = modalBody.querySelector(`.edit-row[data-key="${key}"]`);
+  const proj = document.getElementById(`editProj_${key}`);
+  if (!row || !proj) return;
+  row.classList.toggle('active-qty', q > 0);
+  if (q === o) {
+    proj.textContent = '';
+    proj.classList.remove('neg');
+    return;
+  }
+  const sign = editCtx.isIn ? 1 : -1;
+  const projected = Number(state.stockReal[key] || 0) + sign * (q - o);
+  proj.textContent = `stok → ${projected}`;
+  proj.classList.toggle('neg', projected < 0);
+}
+
+function submitEditTransaction_() {
+  const errorEl = document.getElementById('editTxError');
+  const fail = (msg) => {
+    errorEl.textContent = msg;
+    errorEl.classList.remove('hidden');
+  };
+
+  const items = itemOrder.map((key) => ({ key, qty: editCtx.qty[key] })).filter((it) => it.qty > 0);
+  if (!items.length) return fail('Minimal satu item harus berisi jumlah.');
+
+  const note = document.getElementById('editNoteInput').value.trim();
+  const date = document.getElementById('editDateInput').value;
+  const time = document.getElementById('editTimeInput').value;
+  if (!date || !time) return fail('Tanggal dan jam wajib diisi.');
+
+  const timeChanged = date !== editCtx.origDate || time !== editCtx.origTime;
+  if (timeChanged) {
+    const d = parseTxIso_(`${date}T${time}`);
+    if (d.getTime() < txTimeMin_().getTime() || d.getTime() > Date.now() + 2 * 60000) {
+      return fail(`Waktu harus antara ${state.config.backdateMaxDays} hari lalu s.d. sekarang.`);
+    }
+  }
+  const itemsChanged = itemOrder.some((k) => editCtx.qty[k] !== editCtx.orig[k]);
+  if (!itemsChanged && !timeChanged && note === String(editCtx.tx.note || '')) return fail('Tidak ada perubahan.');
+  errorEl.classList.add('hidden');
+
+  const txId = editCtx.tx.txId;
+  confirmModalBtn.disabled = true;
+  confirmModalBtn.innerHTML = '<span class="btn-spinner"></span> Menyimpan...';
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      confirmModalBtn.disabled = false;
+      confirmModalBtn.textContent = 'Simpan Perubahan';
+      if (!res || !res.ok) {
+        fail((res && res.message) || 'Gagal menyimpan perubahan.');
+        return;
+      }
+      closeModal();
+      editCtx = null;
+      applyServerResult_(res);
+      renderTxnSection();
+      showCenterNotice(res.message || 'Transaksi diperbarui.');
+    })
+    .withFailureHandler((err) => {
+      confirmModalBtn.disabled = false;
+      confirmModalBtn.textContent = 'Simpan Perubahan';
+      fail(err && err.message ? err.message : 'Terjadi kesalahan.');
+    })
+    .editTransaction({
+      accessCode: state.user ? state.user.code : '',
+      txId,
+      items,
+      note,
+      txTime: timeChanged ? `${date}T${time}` : ''
+    });
+}
+</script>

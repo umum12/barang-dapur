@@ -1,0 +1,121 @@
+<script>
+// ===== JsDashboard.html — Hydrate data, strip dashboard, jam topbar, refresh. Bergantung: JsCore. =====
+
+function hydrateDashboard(data) {
+  state.user = data.user;
+  resetRiwayat_(); // riwayat tidak ikut login; dimuat saat menu Riwayat dibuka
+  applyStocks_(data.stocks);
+  state.riwayatExpanded = false;
+  if (data.config) state.config = Object.assign({}, state.config, data.config);
+  resetTxnState(); // juga menyamakan stockPreview dengan stockReal
+
+  userName.textContent = state.user.name;
+  roleText.textContent = state.user.labelRole || state.user.role;
+
+  applyDemoRestrictions_();
+
+  populateReportSelectors_();
+  renderAll();
+  showCenterNotice('Data berhasil diperbarui');
+}
+
+// Tampilkan banner & sembunyikan aksi tulis (submit/hapus/upload) untuk akun
+// yang canSubmit:false (mis. DEMO). Ini hanya pemanis UX -- validasi sah tetap
+// di backend (assertCanWrite_), jadi ini bukan satu-satunya lapisan keamanan.
+function applyDemoRestrictions_() {
+  const readOnly = !!(state.user && state.user.canSubmit === false);
+  demoBanner.classList.toggle('hidden', !readOnly);
+  txnSubmitBtn.classList.toggle('hidden', readOnly);
+  invoicePickBtn.disabled = readOnly;
+  txnTimeToggleBtn.disabled = readOnly;
+}
+
+function buildStripCard(card) {
+  const stock = Number(card.stock) || 0;
+  const hari = estimasiHari_(card.key, stock);
+  const level = hariLevel_(hari);
+  return `
+    <div class="strip-card ${level.cls}">
+      <span class="ico">${escapeHtml(card.icon)}</span>
+      <div class="name">${escapeHtml(card.label)}</div>
+      <div class="stock">${stock}</div>
+      <div class="unit">Tersedia</div>
+      <div class="hari-hint">${stock < 0 ? 'Stok minus' : `${hari} hari lagi`}</div>
+      <div class="status-label">${level.label}</div>
+    </div>
+  `;
+}
+
+function renderAll() {
+  renderStockStrip();
+  renderTxnSection();
+  renderRecent();
+  renderStokDetail();
+}
+
+// Render dashboard strip dengan fade halus (150-200ms), tanpa reload apa pun.
+function renderStockStrip(withFade) {
+  const cards = primaryItemOrder().map((key) => {
+    const meta = itemMeta[key];
+    const stock = Number(state.stockReal[key] || 0);
+    return { key, label: meta.label, icon: meta.icon, stock };
+  });
+
+  if (withFade) {
+    Array.from(stockStrip.children).forEach((el) => el.classList.add('flash'));
+    setTimeout(() => {
+      stockStrip.innerHTML = cards.map(buildStripCard).join('');
+      requestAnimationFrame(() => {
+        Array.from(stockStrip.children).forEach((el) => el.classList.remove('flash'));
+      });
+    }, 160);
+  } else {
+    stockStrip.innerHTML = cards.map(buildStripCard).join('');
+  }
+}
+
+// Jam berjalan di header topbar (di bawah judul "Barang Dapur"):
+// "Hari, dd Bulan yyyy • HH:mm:ss". Murni tampilan (client-side),
+// tidak memengaruhi data transaksi.
+function updateTopbarClock_() {
+  if (!topbarClock) return;
+  const now = new Date();
+  const hari = HARI_ID[now.getDay()];
+  const tanggal = `${now.getDate()} ${BULAN_ID[now.getMonth() + 1]} ${now.getFullYear()}`;
+  const waktu = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+  topbarClock.textContent = `${hari}, ${tanggal} • ${waktu}`;
+}
+
+function setRefreshSpinning(spinning) {
+  refreshBtn.disabled = spinning;
+  refreshIcon.innerHTML = spinning ? '<span class="spin">↻</span>' : '↻';
+}
+
+function refreshDashboard() {
+  setRefreshSpinning(true);
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      setRefreshSpinning(false);
+      if (!res || !res.ok) {
+        showToast((res && res.message) || 'Gagal refresh.');
+        return;
+      }
+
+      invalidateRiwayat_();
+      applyStocks_(res.stocks);
+      syncPreviewToReal_();
+      renderStockStrip(true);
+      renderTxnSection();
+      renderRecent();
+      renderStokDetail();
+      if (state.currentView === 'riwayat') loadRiwayat_(); // sedang melihat Riwayat -> muat ulang
+      showCenterNotice('Data diperbarui');
+    })
+    .withFailureHandler((err) => {
+      setRefreshSpinning(false);
+      showToast(err && err.message ? err.message : 'Terjadi kesalahan.');
+    })
+    .getDashboard(state.user ? state.user.code : DEFAULT_ACCESS_CODE);
+}
+</script>
