@@ -3,7 +3,7 @@
   "short_name": "Barang Dapur",
   "description": "Pantau & catat stok barang dapur dengan cepat",
   "lang": "id",
-  "start_url": "./?source=pwa",
+  "start_url": ".",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
