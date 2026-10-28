@@ -1,7 +1,7 @@
 /*!
  * api-shim.js — pengganti google.script.run untuk versi GitHub Pages.
  *
- * Seluruh kode aplikasi (Js*.html) memanggil  google.script.run.withSuccessHandler(..).withFailureHandler(..).namaFungsi(arg).
+ * Seluruh kode aplikasi (App.html) memanggil  google.script.run.withSuccessHandler(..).withFailureHandler(..).namaFungsi(arg).
  * Berkas ini meniru API itu lewat fetch() ke Web App GAS (/exec -> Gateway.gs), sehingga kode aplikasi
  * TIDAK perlu diubah. Di dalam halaman GAS asli, google.script.run sudah ada dan berkas ini tidak berbuat apa-apa.
  *
