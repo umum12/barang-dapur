@@ -21,7 +21,9 @@ const suites = [
   ['pages.integration.test.js', 'Situs Pages -> fetch -> backend asli (end-to-end)'],
   ['gas-ui.lazy.test.js', 'UI versi GAS: riwayat dimuat saat dibuka'],
   ['gas-ui.actions.test.js', 'UI versi GAS: menu aksi, edit, klik-hantu, hak akses'],
-  ['gas-ui.riwayat.test.js', 'UI versi GAS: tampilan & beban Riwayat']
+  ['gas-ui.riwayat.test.js', 'UI versi GAS: tampilan & beban Riwayat'],
+  ['gas-ui.mode.test.js', 'UI: warna mode (AMBIL merah, DATANG hijau) & kontras'],
+  ['invoice.test.js', 'Foto invoice: kompres <= batas (150 KB), validasi server, ujung-ke-ujung JPEG nyata']
 ];
 
 let failed = 0, totalPass = 0, totalFail = 0;

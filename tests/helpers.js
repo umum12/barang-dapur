@@ -27,7 +27,7 @@ const mkTx = (id, extra = {}) => Object.assign({
   createdAt: '', backdated: false, editInfo: '', edited: false
 }, extra);
 const { JSDOM, VirtualConsole } = require('jsdom');
-// Halaman GAS (index.html + Js*.html) dengan google.script.run TIRUAN. handlers[fn](...args) -> hasil;
+// Halaman GAS (index.html + App.html + Styles.html) dengan google.script.run TIRUAN. handlers[fn](...args) -> hasil;
 // hasil boleh {__fail:'pesan'} (memicu failure handler) atau {__delay:ms, value:hasil}.
 async function openGas({ recent = [], user, handlers = {} } = {}) {
   const u = user || { code: 'EDO', name: 'EDO', role: 'USER', labelRole: 'FS', canSubmit: true };

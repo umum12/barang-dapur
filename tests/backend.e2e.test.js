@@ -294,7 +294,7 @@ for(const [lbl,tk] of [['tanpa token',undefined],['token ngawur',('x'.repeat(64)
 for(const f of ['setupSystem','doGet','getUserByCode_','constructor','__proto__','hasOwnProperty','toString','processTransaction_','getApiHandlers_','']) {
   r=post({fn:f,args:[],token:tok}); t('FORBIDDEN_FN: "'+f+'"',r.b.status==='error'&&r.b.code==='FORBIDDEN_FN'); }
 // body buruk
-for(const [lbl,body,code] of [['bukan JSON','bukan json','BAD_REQUEST'],['kosong','','BAD_REQUEST'],['null','null','BAD_REQUEST'],['array','[]','BAD_REQUEST'],['terlalu besar','a'.repeat(3000001),'BAD_REQUEST']])
+for(const [lbl,body,code] of [['bukan JSON','bukan json','BAD_REQUEST'],['kosong','','BAD_REQUEST'],['null','null','BAD_REQUEST'],['array','[]','BAD_REQUEST'],['terlalu besar','a'.repeat(vm.runInContext('APP_CONFIG.API_MAX_BODY_CHARS',ctx)+1),'BAD_REQUEST']])
   { r=post(body); t('BAD_REQUEST: '+lbl,r.b.status==='error'&&r.b.code===code,r.b.code); }
 
 // logout
@@ -328,6 +328,19 @@ advance(11*MIN); r=login('EDO'); t('jendela berikutnya: login pulih',r.b.status=
 // login sukses tidak menambah hitungan gagal
 alignWindow(); for(const k of Object.keys(cacheStore)) if(k.startsWith('LF:')) delete cacheStore[k];
 for(let i=0;i<30;i++) login('WAY'); t('30x login SUKSES tidak memicu pemblokiran',login('WAY').b.status==='ok');
+}
+
+// ===== Urutan Riwayat saat waktu transaksi SAMA =====
+{
+const day=new Date(Date.now()+H-86400000*2).toISOString().slice(0,10);   // 2 hari lalu (WIB), jam sama untuk keduanya
+const same=day+'T09:00';
+raw('submitTransaction',{accessCode:'EDO',items:[{key:'tisu',qty:1}],note:'tie-pertama',txTime:same});
+raw('submitTransaction',{accessCode:'EDO',items:[{key:'tisu',qty:1}],note:'tie-kedua',txTime:same});
+raw('submitTransaction',{accessCode:'EDO',items:[{key:'tisu',qty:1}],note:'tie-ketiga',txTime:same});
+const order=raw('getRiwayat','EDO').recent.filter(x=>x.note.startsWith('tie-')).map(x=>x.note);
+t('waktu transaksi identik: yang diinput belakangan tampil lebih dulu',order.join()==='tie-ketiga,tie-kedua,tie-pertama',order.join());
+const fresh1=raw('submitTransaction',{accessCode:'EDO',items:[{key:'tisu',qty:1}],note:'baru-sekali'});
+t('transaksi yang baru dibuat SELALU jadi recent[0] (tidak bergantung kecepatan mesin)',raw('getRiwayat','EDO').recent[0].note==='baru-sekali');
 }
 console.log(`\n${pass} lulus, ${failn} gagal`);
 process.exit(failn?1:0);
