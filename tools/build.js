@@ -31,11 +31,26 @@ const outDir = path.resolve(ROOT, opt('out') || 'docs');
 
 if (outDir === ROOT || !outDir.startsWith(ROOT + path.sep)) fail('--out harus berupa subfolder di dalam repo (mis. docs atau dist).');
 
-let execUrl = opt('exec-url') || process.env.BD_EXEC_URL || '';
-if (!execUrl) {
-  const cfgPath = path.join(__dirname, 'pages.config.json');
-  if (fs.existsSync(cfgPath)) { try { execUrl = JSON.parse(read(cfgPath)).execUrl || ''; } catch (e) { fail('tools/pages.config.json bukan JSON valid.'); } }
+let pagesCfg = {};
+const cfgPath = path.join(__dirname, 'pages.config.json');
+if (fs.existsSync(cfgPath)) { try { pagesCfg = JSON.parse(read(cfgPath)); } catch (e) { fail('tools/pages.config.json bukan JSON valid.'); } }
+let execUrl = opt('exec-url') || process.env.BD_EXEC_URL || pagesCfg.execUrl || '';
+
+// Alamat dasar situs (path repo), mis. /barang-dapur/ -> dipakai sebagai "id" manifest. Urutan: --base-path, env BD_BASE_PATH,
+// GITHUB_REPOSITORY (otomatis di GitHub Actions), pages.config.json {"basePath"}. Tidak diketahui -> id dihilangkan.
+function normBasePath(v) {
+  let p = String(v || '').trim();
+  if (!p) return '';
+  if (!/^\/[A-Za-z0-9._~\-\/]*$/.test(p) || /\.\./.test(p)) fail('--base-path tidak valid: "' + p + '". Contoh: /barang-dapur/');
+  if (!p.endsWith('/')) p += '/';
+  return p.replace(/\/{2,}/g, '/');
 }
+let basePath = normBasePath(opt('base-path') || process.env.BD_BASE_PATH || '');
+if (!basePath && process.env.GITHUB_REPOSITORY) {
+  const repoName = process.env.GITHUB_REPOSITORY.split('/')[1] || '';
+  if (repoName) basePath = /\.github\.io$/i.test(repoName) ? '/' : '/' + repoName + '/';
+}
+if (!basePath) basePath = normBasePath(pagesCfg.basePath);
 execUrl = String(execUrl).trim();
 const URL_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[^/]+\/)?macros\/s\/[A-Za-z0-9_-]+\/exec$/;
 if (!execUrl && !allowEmpty) fail('URL Web App belum diisi. Pakai --exec-url, env BD_EXEC_URL, atau tools/pages.config.json (atau --allow-empty lalu edit config.js).');
@@ -47,7 +62,7 @@ const INCLUDE_RE = /<\?!=\s*include\('([A-Za-z0-9_]+)'\)\s*\?>/g;
 const includes = [...indexSrc.matchAll(INCLUDE_RE)].map((m) => m[1]);
 if (!includes.includes('Styles')) fail("index.html tidak meng-include 'Styles'.");
 const jsModules = includes.filter((n) => n !== 'Styles');
-if (!jsModules.length) fail('index.html tidak meng-include modul Js*.');
+if (!jsModules.length) fail('index.html tidak meng-include modul JavaScript (mis. include(\'App\')).');
 
 function unwrap(name, tag) {
   const text = read(path.join(GAS, name + '.html'));
@@ -66,7 +81,20 @@ const swTemplate = read(path.join(WEB, 'sw.template.js'));
 // Aplikasi harus memanggil server hanya lewat google.script.run (yang disediakan shim).
 if (/\bfetch\s*\(/.test(appJs)) fail('Kode aplikasi memanggil fetch() langsung; semua panggilan server harus lewat google.script.run.');
 
-const version = sha(css, appJs, shim, pwa, indexSrc, swTemplate);
+// ---------- manifest ----------
+const manifest = JSON.parse(read(path.join(BRAND, 'manifest.webmanifest')));
+// ISOLASI IDENTITAS. Chrome meng-resolve "id" terhadap ORIGIN, BUKAN folder repo: id "./" => https://user.github.io/ dan
+// menabrak semua PWA lain di domain itu ("sudah terpasang" padahal bukan). Maka id ditulis sebagai path repo yang mutlak
+// (mis. "/barang-dapur/") sehingga identitasnya https://user.github.io/barang-dapur/ — SAMA dengan identitas yang diturunkan dari
+// start_url, jadi tidak mengubah identitas aplikasi yang sudah terpasang. Bila path repo tak diketahui, id dihilangkan
+// (identitas otomatis = start_url, tetap unik per repo). start_url & scope relatif ("./") tidak pernah menyentuh folder lain.
+if (basePath) manifest.id = basePath; else delete manifest.id;
+
+// Versi = sidik jari SEMUA yang disajikan dari cache service worker (kode, manifest, ikon). Bila manifest/ikon berubah tetapi
+// versi tidak, HP yang sudah memasang aplikasi akan terus memakai salinan lama dari cache.
+const assetFiles = ['favicon.svg', 'favicon.ico'].map((f) => path.join(BRAND, f))
+  .concat(fs.readdirSync(path.join(BRAND, 'icons')).filter((f) => f.endsWith('.png')).sort().map((f) => path.join(BRAND, 'icons', f)));
+const version = sha(css, appJs, shim, pwa, indexSrc, swTemplate, JSON.stringify(manifest), ...assetFiles.map((f) => fs.readFileSync(f)));
 
 // ---------- index.html ----------
 const headExtra = [
@@ -97,9 +125,6 @@ if (!/<\/head>/.test(index)) fail('index.html tidak punya </head>.');
 index = index.replace('</head>', headExtra + '\n</head>').replace(/\n[ \t]*\n[ \t]*\n+/g, '\n\n');
 if (/<\?|\?>/.test(index)) fail('Masih ada scriptlet <? ?> di index.html hasil build.');
 
-// ---------- manifest ----------
-const manifest = JSON.parse(read(path.join(BRAND, 'manifest.webmanifest')));
-manifest.id = './';
 
 // ---------- tulis keluaran ----------
 fs.rmSync(outDir, { recursive: true, force: true });
@@ -133,6 +158,7 @@ put('version.json', JSON.stringify({ version }, null, 2) + '\n');
 const kb = (f) => (fs.statSync(path.join(outDir, f)).size / 1024).toFixed(0) + ' KB';
 console.log('Build selesai -> ' + path.relative(ROOT, outDir) + '/');
 console.log('  versi   : ' + version);
+console.log('  base path: ' + (basePath ? basePath + '  (id manifest = "' + basePath + '")' : '(tidak diketahui -> manifest tanpa id; identitas = start_url)'));
 console.log('  exec URL: ' + (execUrl || '(kosong — isi config.js)'));
 console.log('  modul   : ' + jsModules.join(', '));
 console.log('  ukuran  : app.js ' + kb('app.js') + ' | app.css ' + kb('app.css') + ' | index.html ' + kb('index.html'));
