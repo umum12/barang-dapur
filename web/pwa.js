@@ -36,6 +36,18 @@
   }
 
   // ---- Service worker ----
+  var swReg = null;
+  var lastUpdateCheck = Date.now();
+  function checkForUpdate() {
+    if (!swReg) return;
+    lastUpdateCheck = Date.now();
+    swReg.update().catch(function () {});
+  }
+  // Aplikasi terpasang sering hanya dikirim ke latar belakang (timer ikut dibekukan): periksa versi baru saat kembali tampil.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && Date.now() - lastUpdateCheck > 10 * 60 * 1000) checkForUpdate();
+  });
+
   if ('serviceWorker' in navigator) {
     var hadController = !!navigator.serviceWorker.controller;
     var reloading = false;
@@ -48,6 +60,7 @@
 
     window.addEventListener('load', function () {
       navigator.serviceWorker.register('sw.js', { scope: './' }).then(function (reg) {
+        swReg = reg;
         if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg.waiting);
         reg.addEventListener('updatefound', function () {
           var nw = reg.installing;
@@ -56,7 +69,7 @@
             if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner(nw);
           });
         });
-        setInterval(function () { reg.update().catch(function () {}); }, 30 * 60 * 1000); // aplikasi dibuka lama
+        setInterval(checkForUpdate, 30 * 60 * 1000); // aplikasi dibuka lama
       }).catch(function (e) { if (window.console) console.warn('Service worker gagal didaftarkan:', e); });
     });
   }
@@ -66,7 +79,8 @@
   // salah mengira "sudah diinstal") -> tombol membuka panduan langkah demi langkah.
   var deferredPrompt = null;
   var ua = navigator.userAgent || '';
-  var isIos = /iphone|ipad|ipod/i.test(ua);
+  // iPadOS 13+ mengaku sebagai Mac ("Macintosh") tetapi punya layar sentuh.
+  var isIos = /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1);
   var isAndroid = /android/i.test(ua);
 
   var installed = false;                         // sudah dipasang (diterima / appinstalled) -> tombol tidak ditampilkan lagi
@@ -150,7 +164,8 @@
   function syncInstallUi() {
     if (installed || isStandalone()) { removeInstallButtons(); return; }   // sudah terpasang / sedang berjalan sebagai aplikasi
     if (document.querySelector('.bd-install-btn')) return;                  // sudah tampil
-    var login = document.querySelector('.login-card');
+    // Di dalam formulir login (bukan kartu login): saat "memeriksa sesi" formulir tersembunyi, tombol ikut tersembunyi.
+    var login = document.getElementById('loginFormWrap') || document.querySelector('.login-card');
     if (login) { var b1 = makeInstallButton(); b1.id = 'bdInstallBtn'; login.appendChild(b1); }
     var howto = document.querySelector('#viewDashboard .howto-card');
     if (howto) howto.appendChild(makeInstallButton());

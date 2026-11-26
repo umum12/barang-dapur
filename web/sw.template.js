@@ -11,11 +11,18 @@ const RUNTIME_CACHE = PREFIX + 'runtime';
 const LEGACY = /^bd-shell-[0-9a-f]{10}$|^bd-runtime$/;               // nama cache versi lama aplikasi INI (tanpa awalan)
 const PRECACHE = __PRECACHE__;            // URL relatif terhadap scope; yang berversi memuat ?v=HASH
 const NETWORK_FIRST = ['config.js'];      // bisa diedit admin tanpa build ulang -> selalu coba jaringan dulu
+const NETWORK_TIMEOUT_MS = 3000;          // jaringan lambat/menggantung: pakai salinan tersimpan (config.js memblokir tampilan awal)
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) =>
       cache.addAll(PRECACHE.map((u) => new Request(u, { cache: 'reload' })))
+    ).then(() =>
+      // config.js bukan bagian shell berversi, tetapi harus ada untuk peluncuran pertama saat OFFLINE
+      // (halaman pertama dimuat sebelum service worker mengendalikan, jadi config.js tidak pernah lewat sini).
+      caches.open(RUNTIME_CACHE)
+        .then((c) => c.addAll(NETWORK_FIRST.map((u) => new Request(u, { cache: 'reload' }))))
+        .catch(() => {})
     )
   );
   // Tidak ada skipWaiting otomatis: versi baru menunggu sampai pengguna memilih "Muat ulang" (pesan SKIP_WAITING).
@@ -57,16 +64,21 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (NETWORK_FIRST.indexOf(rel) !== -1) {
+    // Jaringan dulu, tetapi dibatasi NETWORK_TIMEOUT_MS: pada sinyal lemah salinan tersimpan dipakai, dan respons
+    // jaringan yang datang belakangan tetap menyegarkan cache (waitUntil) untuk pembukaan berikutnya.
+    const net = fetch(req, { cache: 'no-store' }).then((res) => {
+      if (res && res.ok) {
+        const copy = res.clone();
+        return caches.open(RUNTIME_CACHE).then((c) => c.put(req, copy)).then(() => res, () => res);
+      }
+      return res;
+    });
+    const stored = () => caches.open(RUNTIME_CACHE).then((c) => c.match(req)).then((hit) => hit || caches.match(req));
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), NETWORK_TIMEOUT_MS));
+    event.waitUntil(net.catch(() => {}));
     event.respondWith(
-      fetch(req, { cache: 'no-store' })
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(RUNTIME_CACHE).then((c) => c.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req))
+      Promise.race([net.catch(() => null), timeout])
+        .then((res) => res || stored().then((hit) => hit || net))
     );
     return;
   }

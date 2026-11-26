@@ -14,7 +14,19 @@
 
   var CFG = window.BD_CONFIG || {};
   var TIMEOUT_MS = 60000;   // cold start Apps Script bisa beberapa detik; unggah foto invoice lebih lama
-  var token = null;         // hanya di memori: tidak disimpan di localStorage/sessionStorage
+  // Sesi permanen: token disimpan di perangkat (localStorage) sampai pengguna menekan keluar atau server menolaknya.
+  // Server sendiri menggugurkan sesi yang 30 hari tidak dipakai. Kunci ber-versi agar mudah dimigrasi.
+  var STORE_KEY = 'bd.session.v1';
+  var TOKEN_RE = /^[0-9a-f]{64}$/;
+  function loadToken() {
+    try { var t = window.localStorage.getItem(STORE_KEY); return t && TOKEN_RE.test(t) ? t : null; }
+    catch (_) { return null; }
+  }
+  function saveToken(t) {
+    try { if (t) window.localStorage.setItem(STORE_KEY, t); else window.localStorage.removeItem(STORE_KEY); }
+    catch (_) { /* penyimpanan diblokir (mode privat): sesi hanya berlaku selama halaman terbuka */ }
+  }
+  var token = loadToken();
 
   function makeError(message, code) {
     var e = new Error(message);
@@ -71,11 +83,11 @@
       if (!data || data.status !== 'ok') {
         var code = data && data.code;
         var msg = (data && data.message) || 'Terjadi kesalahan pada server.';
-        if (code === 'AUTH') { token = null; fire('bd:auth-expired'); }
+        if (code === 'AUTH') { token = null; saveToken(null); fire('bd:auth-expired'); }
         throw makeError(msg, code || 'SERVER');
       }
-      if (fn === 'login') token = data.token || null;   // login gagal: result.ok=false, tanpa token
-      if (fn === 'logout') token = null;
+      if (fn === 'login') { token = data.token || null; saveToken(token); }   // login gagal: result.ok=false, tanpa token
+      if (fn === 'logout') { token = null; saveToken(null); }
       return data.result;
     });
   }
@@ -101,13 +113,15 @@
 
   window.google = { script: { run: runner(null, null) } };
 
-  // Dipanggil showLogin_() saat logout / idle: cabut token di server (tanpa menunggu hasilnya).
+  // Dipanggil showLogin_() saat logout / sesi ditolak: hapus token di perangkat dan cabut di server (tanpa menunggu hasilnya).
   window.onBdSessionEnd = function () {
     if (!token) return;
     var t = token;
     token = null;
+    saveToken(null);
     postJson({ fn: 'logout', args: [], token: t }).catch(function () { /* sesi server toh habis sendiri */ });
   };
 
-  window.BD_API = { hasSession: function () { return !!token; } };
+  // persistent: memberi tahu App.html bahwa sesi bertahan sampai keluar (tidak ada batas idle 30 menit di klien).
+  window.BD_API = { hasSession: function () { return !!token; }, persistent: true };
 })();
