@@ -27,14 +27,24 @@
       <div class="login-logo"><svg class="login-logo-svg" role="img" aria-label="Barang Dapur"><use href="#appMark"/></svg></div>
       <div class="login-brand">Barang Dapur</div>
       <div class="login-sub">Pantau &amp; catat stok barang dapur dengan cepat</div>
-      <div class="field" style="margin-top:20px; margin-bottom:0;">
-        <label for="loginCodeInput">Kode Akses</label>
-        <input id="loginCodeInput" class="login-code-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" placeholder="Ketik kode akses" />
+      <div id="loginFormWrap">
+        <div class="field" style="margin-top:20px; margin-bottom:0;">
+          <label for="loginCodeInput">Kode Akses</label>
+          <input id="loginCodeInput" class="login-code-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" placeholder="Ketik kode akses" />
+        </div>
+        <div id="loginError" class="login-error hidden"></div>
+        <button id="loginSubmitBtn" class="login-submit-btn"><span id="loginSubmitLabel">MASUK</span></button>
+        <div id="loginSessionHint" class="login-session-hint">Sesi berakhir otomatis setelah 30 menit tidak ada aktivitas.</div>
+        <div class="login-demo-hint">Ingin mencoba? Ketik <strong>DEMO</strong> untuk masuk.</div>
       </div>
-      <div id="loginError" class="login-error hidden"></div>
-      <button id="loginSubmitBtn" class="login-submit-btn"><span id="loginSubmitLabel">MASUK</span></button>
-      <div class="login-session-hint">Sesi berakhir otomatis setelah 30 menit tidak ada aktivitas.</div>
-      <div class="login-demo-hint">Ingin mencoba? Ketik <strong>DEMO</strong> untuk masuk.</div>
+      <div id="resumeBox" class="resume-box hidden">
+        <div id="resumeSpinner" class="report-spinner"></div>
+        <div id="resumeText" class="resume-text"></div>
+        <div id="resumeActions" class="resume-actions hidden">
+          <button type="button" id="resumeRetryBtn" class="login-submit-btn">COBA LAGI</button>
+          <button type="button" id="resumeOtherBtn" class="small-link">Masuk dengan kode lain</button>
+        </div>
+      </div>
     </div>
   </div>
 

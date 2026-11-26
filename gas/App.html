@@ -60,6 +60,11 @@ const state = {
   invoice: null,
   pendingPayload: null,
   pendingDeleteTxId: null,
+  // ID permintaan untuk kirim-ulang aman: dipertahankan selama isi transaksi sama, dibuang setelah berhasil.
+  lastReq: null,
+  // Bahan snapshot (daftar stok mentah dari server) & penanda sedang menampilkan snapshot (kode akses tidak disimpan).
+  stocksRaw: null,
+  fromSnapshot: false,
   lastActivity: Date.now(),
   idleTimer: null,
   currentView: 'dashboard',
@@ -86,6 +91,7 @@ const itemMeta = {};
 
 function applyStocks_(stocks) {
   const list = Array.isArray(stocks) ? stocks : [];
+  state.stocksRaw = list;
   itemOrder = list.map((c) => c.key);
   state.stockReal = {};
   list.forEach((c) => {
@@ -140,6 +146,14 @@ const loginCodeInput = document.getElementById('loginCodeInput');
 const loginSubmitBtn = document.getElementById('loginSubmitBtn');
 const loginSubmitLabel = document.getElementById('loginSubmitLabel');
 const loginError = document.getElementById('loginError');
+const loginFormWrap = document.getElementById('loginFormWrap');
+const loginSessionHint = document.getElementById('loginSessionHint');
+const resumeBox = document.getElementById('resumeBox');
+const resumeSpinner = document.getElementById('resumeSpinner');
+const resumeText = document.getElementById('resumeText');
+const resumeActions = document.getElementById('resumeActions');
+const resumeRetryBtn = document.getElementById('resumeRetryBtn');
+const resumeOtherBtn = document.getElementById('resumeOtherBtn');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalTitle = document.getElementById('modalTitle');
 const modalBody = document.getElementById('modalBody');
@@ -187,11 +201,18 @@ function vibrateTiny() {
   }
 }
 
-// ===== SESSION IDLE TIMEOUT (murni frontend, tidak ada token/expiry dari backend) =====
+// ===== SESI =====
+// Versi GitHub Pages (api-shim.js memasang BD_API.persistent): sesi tersimpan di perangkat dan bertahan sampai pengguna
+// menekan keluar (server menggugurkan sesi yang 30 hari tidak dipakai). Tidak ada batas idle di klien.
+// Versi GAS: tidak ada penyimpanan sesi; batas idle 30 menit di bawah tetap berlaku seperti semula.
+function isPersistentSession_() {
+  return !!(window.BD_API && window.BD_API.persistent);
+}
 function setActivity() {
   state.lastActivity = Date.now();
 }
 function startIdleWatcher() {
+  if (isPersistentSession_()) return;
   if (state.idleTimer) clearInterval(state.idleTimer);
   state.idleTimer = setInterval(() => {
     if (Date.now() - state.lastActivity > IDLE_MS) {
@@ -272,22 +293,86 @@ function doLogout_() {
 
 // ===== [2/7] DASHBOARD — Hydrate data, strip dashboard, jam bilah atas, refresh =====
 
-function hydrateDashboard(data) {
+// opts.quiet: tanpa pemberitahuan tengah layar. opts.keepInput: jangan hapus isian transaksi yang sedang diketik
+// (dipakai saat data asli menyusul snapshot yang sudah tampil).
+function hydrateDashboard(data, opts) {
+  opts = opts || {};
   state.user = data.user;
   resetRiwayat_(); // riwayat tidak ikut login; dimuat saat menu Riwayat dibuka
   applyStocks_(data.stocks);
   state.riwayatExpanded = false;
   if (data.config) state.config = Object.assign({}, state.config, data.config);
-  resetTxnState(); // juga menyamakan stockPreview dengan stockReal
+  if (opts.keepInput) syncPreviewToReal_(); else resetTxnState(); // resetTxnState juga menyamakan stockPreview dengan stockReal
 
   userName.textContent = state.user.name;
   roleText.textContent = state.user.labelRole || state.user.role;
 
   applyDemoRestrictions_();
 
-  populateReportSelectors_();
+  if (!opts.keepInput) populateReportSelectors_();
   renderAll();
-  showCenterNotice('Data berhasil diperbarui');
+  persistSnapshot_();
+  if (!opts.quiet) showCenterNotice('Data berhasil diperbarui');
+}
+
+// ===== SNAPSHOT (hanya versi Pages) =====
+// Data terakhir disimpan di perangkat agar aplikasi langsung tampil saat dibuka (Apps Script yang "dingin" bisa
+// beberapa detik); data asli menyusul di belakang layar. Isinya hanya nama/peran, daftar stok, dan konfigurasi:
+// TANPA kode akses. Dihapus saat keluar atau saat server menolak sesi.
+const SNAP_KEY = 'bd.snap.v1';
+const SNAP_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // lebih tua dari ini: tidak ditampilkan (angka stok terlalu usang)
+
+function persistSnapshot_() {
+  if (!isPersistentSession_() || !state.user || !state.stocksRaw) return;
+  try {
+    localStorage.setItem(SNAP_KEY, JSON.stringify({
+      t: Date.now(),
+      user: { name: state.user.name, role: state.user.role, labelRole: state.user.labelRole, canSubmit: state.user.canSubmit },
+      stocks: state.stocksRaw,
+      config: state.config
+    }));
+  } catch (e) { /* penyimpanan penuh/diblokir: abaikan */ }
+}
+
+function loadSnapshot_() {
+  if (!isPersistentSession_()) return null;
+  try {
+    const s = JSON.parse(localStorage.getItem(SNAP_KEY) || 'null');
+    if (!s || !s.user || !Array.isArray(s.stocks) || !s.stocks.length) return null;
+    if (Date.now() - Number(s.t || 0) > SNAP_MAX_AGE_MS) return null;
+    return s;
+  } catch (e) { return null; }
+}
+
+function clearSnapshot_() {
+  try { localStorage.removeItem(SNAP_KEY); } catch (e) {}
+}
+
+// Tampilkan snapshot seketika, lalu periksa sesi & muat data asli di belakang layar.
+function paintFromSnapshot_(snap) {
+  showApp_();
+  hydrateDashboard({ user: snap.user, stocks: snap.stocks, config: snap.config }, { quiet: true });
+  state.fromSnapshot = true;
+  setActivity();
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      if (!res || !res.ok) { showLogin_(); return; }
+      state.fromSnapshot = false;
+      hydrateDashboard(res, { quiet: true, keepInput: true });
+    })
+    .withFailureHandler((err) => {
+      if (err && err.code === 'AUTH') {
+        showLogin_();
+        loginError.textContent = 'Sesi berakhir. Silakan masuk lagi.';
+        loginError.classList.remove('hidden');
+        return;
+      }
+      const d = new Date(snap.t);
+      const when = isSameDay_(d, new Date()) ? formatJam_(d) : `${dayGroupLabel_(d)} ${formatJam_(d)}`;
+      showToast(`Tidak terhubung ke server. Menampilkan data terakhir (${when}).`);
+    })
+    .getDashboard('');
 }
 
 // Tampilkan banner & sembunyikan aksi tulis (submit/hapus/upload) untuk akun
@@ -362,30 +447,34 @@ function setRefreshSpinning(spinning) {
   refreshIcon.innerHTML = spinning ? '<span class="spin">↻</span>' : '↻';
 }
 
-function refreshDashboard() {
+// silent=true: dipanggil otomatis saat aplikasi kembali tampil (tanpa pemberitahuan/toast, gagal pun diam).
+function refreshDashboard(silent) {
+  if (refreshBtn.disabled) return; // sudah berjalan
   setRefreshSpinning(true);
 
   google.script.run
     .withSuccessHandler((res) => {
       setRefreshSpinning(false);
       if (!res || !res.ok) {
-        showToast((res && res.message) || 'Gagal refresh.');
+        if (!silent) showToast((res && res.message) || 'Gagal refresh.');
         return;
       }
 
       invalidateRiwayat_();
       applyStocks_(res.stocks);
+      persistSnapshot_();
+      state.fromSnapshot = false;
       syncPreviewToReal_();
       renderStockStrip(true);
       renderTxnSection();
       renderRecent();
       renderStokDetail();
       if (state.currentView === 'riwayat') loadRiwayat_(); // sedang melihat Riwayat -> muat ulang
-      showCenterNotice('Data diperbarui');
+      if (!silent) showCenterNotice('Data diperbarui');
     })
     .withFailureHandler((err) => {
       setRefreshSpinning(false);
-      showToast(err && err.message ? err.message : 'Terjadi kesalahan.');
+      if (!silent) showToast(err && err.message ? err.message : 'Terjadi kesalahan.');
     })
     .getDashboard(state.user ? state.user.code : DEFAULT_ACCESS_CODE);
 }
@@ -393,6 +482,7 @@ function refreshDashboard() {
 // ===== [3/7] INPUT — Menu Input: qty, mode AMBIL/DATANG, invoice, waktu transaksi, submit, applyServerResult_ =====
 
 function resetTxnState() {
+  state.lastReq = null;
   state.mode = 'OUT';
   state.txTime = null;
   state.txInputs = {};
@@ -658,6 +748,16 @@ function getSelectedTxnItems() {
     .filter((item) => item.qty > 0);
 }
 
+function newReqId_() {
+  try {
+    const a = new Uint8Array(12);
+    crypto.getRandomValues(a);
+    return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 8);
+  }
+}
+
 function confirmTxnSubmit() {
   if (txnSubmitBtn.disabled) return;
   const items = getSelectedTxnItems();
@@ -705,13 +805,18 @@ function confirmTxnSubmit() {
   confirmModalBtn.classList.add(isIn ? 'btn-in' : 'btn-out'); // konfirmasi berwarna sesuai mode
   confirmModalBtn.onclick = submit;
 
+  // ID permintaan: sama selama isi transaksi sama (kirim ulang setelah koneksi putus tidak mencatat dobel di server).
+  const sig = JSON.stringify({ m: state.mode, i: items, n: note, t: txTimeIso });
+  if (!state.lastReq || state.lastReq.sig !== sig) state.lastReq = { sig, reqId: newReqId_() };
+
   state.pendingPayload = {
     accessCode: state.user ? state.user.code : '',
     items,
     note,
     mode: state.mode,
     txTime: txTimeIso,
-    invoice: isIn ? state.invoice : undefined
+    invoice: isIn ? state.invoice : undefined,
+    reqId: state.lastReq.reqId
   };
 }
 
@@ -729,6 +834,7 @@ function applyServerResult_(res) {
     invalidateRiwayat_();
   }
   applyStocks_(res.stocks);
+  persistSnapshot_();
   syncPreviewToReal_();
   renderStockStrip(true);
   renderRecent();
@@ -765,6 +871,10 @@ function submit() {
     })
     .withFailureHandler((err) => {
       confirmModalBtn.disabled = false;
+      // Hasil tidak pasti (waktu habis / koneksi putus): transaksi mungkin SUDAH tersimpan. Popup tetap terbuka dengan
+      // tombol "Kirim Ulang"; ID permintaan yang sama membuat server tidak mencatat dobel.
+      const unsure = err && (err.code === 'TIMEOUT' || err.code === 'NETWORK' || err.code === 'HTTP');
+      if (unsure) { showSubmitRetry_(err.message); return; }
       confirmModalBtn.textContent = 'OK';
       closeModal();
       showCenterNotice(err && err.message ? err.message : 'Terjadi kesalahan.');
@@ -776,16 +886,28 @@ function submit() {
       items: payload.items,
       note: payload.note,
       txTime: payload.txTime,
-      invoice: payload.invoice
+      invoice: payload.invoice,
+      reqId: payload.reqId
     });
   } else {
     call.submitTransaction({
       accessCode: payload.accessCode,
       items: payload.items,
       note: payload.note,
-      txTime: payload.txTime
+      txTime: payload.txTime,
+      reqId: payload.reqId
     });
   }
+}
+
+function showSubmitRetry_(msg) {
+  confirmModalBtn.textContent = 'Kirim Ulang';
+  let el = document.getElementById('submitError');
+  if (!el) {
+    modalBody.insertAdjacentHTML('beforeend', '<div id="submitError" class="login-error"></div>');
+    el = document.getElementById('submitError');
+  }
+  el.textContent = `${String(msg || 'Koneksi bermasalah.').replace(/\s*Coba lagi\.?$/i, '')} Tekan Kirim Ulang. Aman, tidak akan tercatat ganda.`;
 }
 
 // ===== Waktu transaksi (susulan) =====
@@ -1337,6 +1459,10 @@ function canManageTx_(tx) {
 }
 
 function openTxActions_(txId, el) {
+  if (state.user && !state.user.code) { // masih menampilkan snapshot (tanpa kode akses): tunggu data asli
+    showCenterNotice('Menyambungkan ke server… coba lagi sebentar.');
+    return;
+  }
   const sameId = (a, b) => String(a).trim().toUpperCase() === String(b).trim().toUpperCase();
   const tx = state.recent.find((t) => sameId(t.txId, txId));
   if (!tx) {
@@ -1721,16 +1847,66 @@ function init() {
 
   // DEVELOPMENT_MODE = false -> login screen kode akses ditampilkan dahulu.
   // loadDashboard_(kodeAksesUser) baru dipanggil setelah login() backend sukses.
+  if (isPersistentSession_()) {
+    loginSessionHint.textContent = 'Anda tetap masuk sampai menekan tombol keluar.';
+    // Ada sesi tersimpan: layar login menampilkan "memeriksa sesi", server memeriksa kode akses petugas,
+    // lalu langsung masuk. Hanya bila sesi ditolak server, formulir kode akses ditampilkan.
+    if (window.BD_API.hasSession()) {
+      const snap = loadSnapshot_();
+      if (snap) paintFromSnapshot_(snap); else resumeSession_();
+      return;
+    }
+  }
   showLogin_();
+}
+
+// Mode isi kartu login: 'form' = formulir kode akses, 'loading' = memeriksa sesi, 'error' = gagal terhubung (bisa coba lagi).
+function setLoginMode_(mode, msg) {
+  loginFormWrap.classList.toggle('hidden', mode !== 'form');
+  resumeBox.classList.toggle('hidden', mode === 'form');
+  resumeSpinner.classList.toggle('hidden', mode !== 'loading');
+  resumeActions.classList.toggle('hidden', mode !== 'error');
+  if (mode === 'loading') resumeText.textContent = 'Memeriksa sesi dan menghubungkan ke server...';
+  if (mode === 'error') resumeText.textContent = msg || 'Tidak dapat terhubung ke server.';
+}
+
+// Buka aplikasi dengan sesi tersimpan. getDashboard memakai identitas dari token di server (kode kiriman klien diabaikan),
+// jadi kode petugas yang sudah dihapus / sesi yang dicabut langsung ditolak (AUTH). Gangguan jaringan TIDAK menghapus sesi.
+function resumeSession_() {
+  appView.classList.add('hidden');
+  loginView.classList.remove('hidden');
+  loginError.classList.add('hidden');
+  setLoginMode_('loading');
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      if (!res || !res.ok) { showLogin_(); return; }
+      showApp_();
+      hydrateDashboard(res);
+      setActivity();
+    })
+    .withFailureHandler((err) => {
+      if (err && err.code === 'AUTH') {
+        showLogin_();
+        loginError.textContent = 'Sesi berakhir. Silakan masuk lagi.';
+        loginError.classList.remove('hidden');
+        return;
+      }
+      setLoginMode_('error', err && err.message ? err.message : 'Tidak dapat terhubung ke server.');
+    })
+    .getDashboard('');
 }
 
 function showLogin_() {
   stopIdleWatcher();
+  clearSnapshot_();
+  state.fromSnapshot = false;
   // Versi GitHub Pages: api-shim.js memasang kait ini untuk mencabut token sesi di server. Di GAS tidak ada -> tidak terjadi apa-apa.
   if (typeof window.onBdSessionEnd === 'function') window.onBdSessionEnd();
   appView.classList.add('hidden');
   loginView.classList.remove('hidden');
   loginError.classList.add('hidden');
+  setLoginMode_('form');
   loginCodeInput.value = '';
   setTimeout(() => loginCodeInput.focus(), 50);
 }
@@ -1810,7 +1986,20 @@ txnToggleBtn.addEventListener('click', () => {
   state.txnExpanded = !state.txnExpanded;
   renderTxnSection();
 });
-refreshBtn.addEventListener('click', refreshDashboard);
+refreshBtn.addEventListener('click', () => refreshDashboard());
+
+// Aplikasi (PWA) bisa terbuka berhari-hari di latar belakang: saat kembali tampil setelah >= RESUME_REFRESH_MS,
+// data stok dimuat ulang diam-diam agar angka di layar tidak usang. Tidak dijalankan saat popup terbuka;
+// isian transaksi yang sedang diketik tidak terhapus (hanya stok yang diperbarui).
+const RESUME_REFRESH_MS = 2 * 60 * 1000;
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  if (!state.user || !hiddenAt || Date.now() - hiddenAt < RESUME_REFRESH_MS) return;
+  if (modalBackdrop.style.display === 'flex') return;
+  hiddenAt = 0;
+  refreshDashboard(true);
+});
 logoutBtn.addEventListener('click', askLogout_);
 loginCodeInput.addEventListener('input', (e) => {
   const start = e.target.selectionStart;
@@ -1822,6 +2011,8 @@ loginCodeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') attemptLogin_();
 });
 loginSubmitBtn.addEventListener('click', attemptLogin_);
+resumeRetryBtn.addEventListener('click', resumeSession_);
+resumeOtherBtn.addEventListener('click', showLogin_); // sesi tersimpan dicabut, lalu formulir kode akses tampil
 // Setelah long-press, browser sentuh bisa mengirim klik susulan ke titik jari yang sama --
 // yang kini sudah tertutup modal (menutup popup / menekan tombol tanpa disengaja). Abaikan 0,5 dtk pertama.
 modalBackdrop.addEventListener('click', (e) => {
