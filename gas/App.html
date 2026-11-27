@@ -252,18 +252,24 @@ function showCenterNotice(text) {
 
 // Waktu modal terakhir dibuka; dipakai bagian [7/7] BOOT untuk menahan "klik hantu" setelah long-press.
 let modalOpenedAt = 0;
+let modalReturnFocus = null; // elemen yang fokus sebelum popup dibuka; fokus dikembalikan saat popup ditutup
 
 function openModal(content, title) {
+  if (modalBackdrop.style.display !== 'flex') modalReturnFocus = document.activeElement; // popup bertingkat: jangan ditimpa
   modalOpenedAt = Date.now();
   confirmModalBtn.style.display = '';
   confirmModalBtn.classList.remove('btn-out', 'btn-in'); // warna mode hanya untuk konfirmasi AMBIL/DATANG & edit
   modalTitle.textContent = title || 'Konfirmasi';
   modalBody.innerHTML = content;
   modalBackdrop.style.display = 'flex';
+  // Fokus ke popup agar pembaca layar membacakan judulnya (formulir yang punya input memindahkan fokus sendiri sesudahnya).
+  setTimeout(() => { if (modalBackdrop.style.display === 'flex') modalBackdrop.querySelector('.modal').focus({ preventScroll: true }); }, 0);
 }
 
 function closeModal() {
   modalBackdrop.style.display = 'none';
+  if (modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus({ preventScroll: true });
+  modalReturnFocus = null;
   state.pendingPayload = null;
   state.pendingDeleteTxId = null;
   confirmModalBtn.classList.remove('btn-danger', 'btn-out', 'btn-in');
@@ -433,13 +439,17 @@ function renderStockStrip(withFade) {
 // Jam berjalan di header topbar (di bawah judul "Barang Dapur"):
 // "Hari, dd Bulan yyyy • HH:mm:ss". Murni tampilan (client-side),
 // tidak memengaruhi data transaksi.
+// Format ringkas "Kam, 26 Nov 2026 • 10:50" (tanpa detik): muat di HP sempit; CSS menyembunyikan tahun/hari bila layar sangat kecil.
+// Tidak diperbarui saat aplikasi tidak terlihat (hemat baterai); diperbarui seketika saat kembali tampil.
+const HARI_SINGKAT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 function updateTopbarClock_() {
-  if (!topbarClock) return;
+  if (!topbarClock || document.visibilityState === 'hidden') return;
   const now = new Date();
-  const hari = HARI_ID[now.getDay()];
-  const tanggal = `${now.getDate()} ${BULAN_ID[now.getMonth() + 1]} ${now.getFullYear()}`;
-  const waktu = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-  topbarClock.textContent = `${hari}, ${tanggal} • ${waktu}`;
+  const html = `<span class="clk-day">${HARI_SINGKAT[now.getDay()]}, </span>${now.getDate()} ${BULAN_ID[now.getMonth() + 1]}` +
+    `<span class="clk-year"> ${now.getFullYear()}</span> • ${pad2_(now.getHours())}:${pad2_(now.getMinutes())}`;
+  if (topbarClock.dataset.v === html) return;
+  topbarClock.dataset.v = html;
+  topbarClock.innerHTML = html;
 }
 
 function setRefreshSpinning(spinning) {
@@ -535,9 +545,9 @@ function buildTxnRow(key) {
         </div>
       </div>
       <div class="qty-row">
-        <button class="qty-btn" type="button" data-action="dec" data-key="${key}" ${minusDisabled ? 'disabled' : ''}>−</button>
-        <input class="qty-input" type="number" inputmode="numeric" min="0" value="${qty}" data-key="${key}" />
-        <button class="qty-btn" type="button" data-action="inc" data-key="${key}" ${plusDisabled ? 'disabled' : ''}>+</button>
+        <button class="qty-btn" type="button" data-action="dec" data-key="${key}" aria-label="Kurangi ${escapeHtml(meta.label)}" ${minusDisabled ? 'disabled' : ''}>−</button>
+        <input class="qty-input" type="number" inputmode="numeric" min="0" value="${qty}" data-key="${key}" aria-label="Jumlah ${escapeHtml(meta.label)}" />
+        <button class="qty-btn" type="button" data-action="inc" data-key="${key}" aria-label="Tambah ${escapeHtml(meta.label)}" ${plusDisabled ? 'disabled' : ''}>+</button>
       </div>
     </div>
   `;
@@ -546,6 +556,8 @@ function buildTxnRow(key) {
 function renderTxnSection() {
   modeOutBtn.classList.toggle('active', state.mode === 'OUT');
   modeInBtn.classList.toggle('active', state.mode === 'IN');
+  modeOutBtn.setAttribute('aria-pressed', String(state.mode === 'OUT'));
+  modeInBtn.setAttribute('aria-pressed', String(state.mode === 'IN'));
   txnCard.classList.toggle('dark', state.mode === 'IN');
 
   recomputePreview_();
@@ -797,7 +809,7 @@ function confirmTxnSubmit() {
         <span>Total</span><span>${total}</span>
       </div>
     </div>
-  `, 'Konfirmasi');
+  `, isIn ? 'Konfirmasi DATANG' : 'Konfirmasi AMBIL'); // mode disebut dengan kata, bukan hanya warna/tanda
 
   confirmModalBtn.textContent = 'OK';
   confirmModalBtn.classList.remove('btn-danger');
@@ -1253,7 +1265,7 @@ function buildRecentHtml_(transactions, withGroupHeader) {
       : buildItemBadges_(tx.itemsJson);
     const noteHtml = tx.note ? `<div class="recent-note">📝 ${escapeHtml(tx.note)}</div>` : '';
     const cameraHtml = isRestock && tx.invoiceUrl
-      ? `<a href="${escapeHtml(tx.invoiceUrl)}" target="_blank" rel="noopener" class="recent-camera">📷</a>`
+      ? `<a href="${escapeHtml(tx.invoiceUrl)}" target="_blank" rel="noopener" class="recent-camera" aria-label="Lihat foto invoice" title="Lihat foto invoice">📷</a>`
       : '';
 
     html += `
@@ -1518,9 +1530,9 @@ function askEditTransaction_(tx) {
           <div class="edit-proj" id="editProj_${key}"></div>
         </div>
         <div class="qty-row">
-          <button type="button" class="qty-btn edit-qty-btn" data-action="dec" data-key="${key}">−</button>
-          <input class="qty-input edit-qty-input" type="number" inputmode="numeric" min="0" value="${orig[key]}" data-key="${key}" />
-          <button type="button" class="qty-btn edit-qty-btn" data-action="inc" data-key="${key}">+</button>
+          <button type="button" class="qty-btn edit-qty-btn" data-action="dec" data-key="${key}" aria-label="Kurangi ${escapeHtml(meta.label)}">−</button>
+          <input class="qty-input edit-qty-input" type="number" inputmode="numeric" min="0" value="${orig[key]}" data-key="${key}" aria-label="Jumlah ${escapeHtml(meta.label)}" />
+          <button type="button" class="qty-btn edit-qty-btn" data-action="inc" data-key="${key}" aria-label="Tambah ${escapeHtml(meta.label)}">+</button>
         </div>
       </div>
     `;
@@ -1749,7 +1761,7 @@ function buildReportHtml_(res) {
     const koreksiText = koreksi === 0 ? '—' : (koreksi > 0 ? `+${koreksi}` : `${koreksi}`);
     const koreksiStyle = koreksi === 0
       ? 'color:var(--muted);'
-      : (koreksi > 0 ? 'color:#1b8f4d; font-weight:800;' : 'color:#d13b3b; font-weight:800;');
+      : (koreksi > 0 ? 'color:var(--aman); font-weight:800;' : 'color:var(--kritis); font-weight:800;');
     return `
       <tr>
         <td>${idx + 1}</td>
@@ -1759,7 +1771,7 @@ function buildReportHtml_(res) {
         <td>${item.usage}</td>
         <td style="${koreksiStyle}">${koreksiText}</td>
         <td><strong>${item.stokAkhir}</strong></td>
-        <td class="nm-col" style="color:${level.cls === 'danger' ? '#d13b3b' : level.cls === 'orange' ? '#e8740c' : level.cls === 'warning' ? '#d4a91a' : '#1b8f4d'}; font-weight:800;">
+        <td class="nm-col" style="color:${level.cls === 'danger' ? 'var(--kritis)' : level.cls === 'orange' ? 'var(--menipis)' : level.cls === 'warning' ? 'var(--waspada)' : 'var(--aman)'}; font-weight:800;">
           ${hari} Hari Lagi (${level.label})
         </td>
       </tr>
@@ -1827,10 +1839,15 @@ function switchView(viewKey) {
     views[key].classList.toggle('hidden', key !== viewKey);
   });
   bottomNav.querySelectorAll('.nav-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.view === viewKey);
+    const on = btn.dataset.view === viewKey;
+    btn.classList.toggle('active', on);
+    if (on) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
   });
   state.currentView = viewKey;
   if (viewKey === 'riwayat' && !state.recentLoaded) loadRiwayat_();
+  // Yang menggulir adalah .page (bukan window): tab baru selalu mulai dari atas.
+  const pageEl = document.querySelector('.page');
+  if (pageEl) pageEl.scrollTop = 0;
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }
 
@@ -2036,6 +2053,22 @@ reportBackBtn.addEventListener('click', backToReportForm_);
 reportPrintBtn.addEventListener('click', () => window.print());
 reportPdfBtn.addEventListener('click', () => window.print());
 
+// Popup: Escape menutup (kecuali sedang menyimpan), Tab berputar di dalam popup.
+document.addEventListener('keydown', (e) => {
+  if (modalBackdrop.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    if (!confirmModalBtn.disabled) { e.preventDefault(); closeModal(); }
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const modalEl = modalBackdrop.querySelector('.modal');
+  const f = Array.from(modalEl.querySelectorAll('button, input, select, textarea, a[href]')).filter((el) => !el.disabled && el.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1], act = document.activeElement;
+  if (e.shiftKey && (act === first || act === modalEl)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
+});
+
 // Keyboard-avoidance: iOS Safari (and some Android WebViews) don't reliably
 // resize/scroll the viewport when a focused input is near the bottom of a
 // scrollable panel or inside the modal. Nudge the focused field into view
@@ -2064,7 +2097,8 @@ window.addEventListener('bd:auth-expired', () => {
 });
 
 updateTopbarClock_();
-setInterval(updateTopbarClock_, 1000);
+setInterval(updateTopbarClock_, 10000);
+document.addEventListener('visibilitychange', updateTopbarClock_);
 
 init();
 </script>

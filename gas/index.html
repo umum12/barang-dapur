@@ -32,7 +32,7 @@
           <label for="loginCodeInput">Kode Akses</label>
           <input id="loginCodeInput" class="login-code-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" placeholder="Ketik kode akses" />
         </div>
-        <div id="loginError" class="login-error hidden"></div>
+        <div id="loginError" class="login-error hidden" role="alert"></div>
         <button id="loginSubmitBtn" class="login-submit-btn"><span id="loginSubmitLabel">MASUK</span></button>
         <div id="loginSessionHint" class="login-session-hint">Sesi berakhir otomatis setelah 30 menit tidak ada aktivitas.</div>
         <div class="login-demo-hint">Ingin mencoba? Ketik <strong>DEMO</strong> untuk masuk.</div>
@@ -59,10 +59,11 @@
         </div>
         <div class="userbox">
           <div class="userinfo">
-            <div class="line"><span id="userName"></span> <span class="role">- <span id="roleText"></span></span></div>
+            <div class="line"><span id="userName"></span></div>
+            <div class="line role"><span id="roleText"></span></div>
           </div>
-          <button id="refreshBtn" class="icon-btn" title="Refresh"><span id="refreshIcon">🔄</span></button>
-          <button id="logoutBtn" class="icon-btn logout" title="Logout">⛔</button>
+          <button id="refreshBtn" class="icon-btn" title="Muat ulang data" aria-label="Muat ulang data"><span id="refreshIcon">🔄</span></button>
+          <button id="logoutBtn" class="icon-btn logout" title="Keluar" aria-label="Keluar">⛔</button>
         </div>
       </div>
     </div>
@@ -225,7 +226,7 @@
   </div>
 
   <div id="modalBackdrop" class="modal-backdrop">
-    <div class="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
       <div class="modal-head">
         <h3 id="modalTitle">Konfirmasi</h3>
       </div>
@@ -237,8 +238,8 @@
     </div>
   </div>
 
-  <div id="toast" class="toast"></div>
-  <div id="centerNotice" class="center-notice"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="centerNotice" class="center-notice" role="status" aria-live="polite"></div>
 
   <?!= include('App') ?>
 

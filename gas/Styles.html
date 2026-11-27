@@ -3,14 +3,14 @@
   --bg:#f7f3ee;
   --card:#ffffff;
   --text:#2b1f17;
-  --muted:#7a6a5d;
+  --muted:#6f6054;
   --line:#ebe3da;
   --primary:#6f4428;
   --primary-2:#57331d;
   --primary-tint:#f4eadf;
   --safe:#1b8f4d;
   --warn:#d48a11;
-  --danger:#d13b3b;
+  --danger:#c62f2f;
   --orange:#e8740c;
   --orange-2:#c75e02;
   /* Mode transaksi: AMBIL = merah, DATANG = hijau (selaras dengan lencana di Riwayat). Kontras putih >= 5,4:1. */
@@ -20,10 +20,10 @@
   --in:#167a3f;
   --in-2:#106230;
   --in-tint:#eaf7ee;
-  --aman:#1b8f4d;
-  --waspada:#d4a91a;
-  --menipis:#e8740c;
-  --kritis:#d13b3b;
+  --aman:#177a41;
+  --waspada:#8a6a00;
+  --menipis:#a84d00;
+  --kritis:#c62f2f;
   --shadow:0 10px 24px rgba(18, 30, 56, .08);
   --radius:18px;
 }
@@ -928,7 +928,7 @@ body{
 }
 .report-table th.weekend, .report-table td.weekend{
   background:#fdecea;
-  color:#d13b3b;
+  color:var(--kritis);
 }
 .report-table th.weekend{
   color:#b3271f;
@@ -984,7 +984,7 @@ body{
   .report-doc{ border:0; padding:0; }
   .report-table{ font-size:0.625rem; }
   .report-table th{ background:#f3e9df !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .report-table th.weekend, .report-table td.weekend{ background:#fdecea !important; color:#d13b3b !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .report-table th.weekend, .report-table td.weekend{ background:#fdecea !important; color:#c62f2f !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .report-koreksi-item{ background:#faf7ff !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 }
 
@@ -1247,4 +1247,32 @@ body{
 .resume-box{ margin-top:22px; display:flex; flex-direction:column; align-items:center; gap:12px; }
 .resume-text{ font-size:0.8438rem; color:var(--muted); line-height:1.45; padding:0 6px; }
 .resume-actions{ display:flex; flex-direction:column; align-items:center; gap:12px; width:100%; }
+
+/* ===== UX mobile-first (hasil audit): target sentuh >= 44px, input 16px, kontras, tombol KIRIM menempel, header ringkas ===== */
+.userinfo{ display:flex; flex-direction:column; align-items:flex-end; }
+.userinfo .line.role{ font-size:.6875rem; color:var(--muted); font-weight:600; }
+.icon-btn{ width:2.75rem; height:2.75rem; min-width:2.75rem; min-height:2.75rem; }
+@media (max-width:24rem){ .clk-year{ display:none; } }   /* header sempit: jam tanpa tahun */
+@media (max-width:20.5rem){ .clk-day{ display:none; } }  /* sangat sempit: tanpa nama hari */
+
+.note-input{ font-size:1rem; min-height:2.75rem; }       /* >= 16px: iOS tidak memperbesar halaman saat fokus */
+.btn, .mode-btn, .txn-toggle-btn{ min-height:2.75rem; }
+.small-link{ min-height:2.75rem; min-width:2.75rem; padding:0 .75rem; display:inline-flex; align-items:center; justify-content:center; font-size:.8125rem; }
+.txn-time-row .small-link{ margin-right:-.75rem; }
+.txn-card.dark .small-link{ color:#e8cfb4; }
+.recent-camera{ display:flex; align-items:center; justify-content:flex-end; min-height:2.75rem; margin-top:0; font-size:1.125rem; }
+
+.toast{ bottom:calc(4.75rem + env(safe-area-inset-bottom, 0px)); }   /* di atas bilah navigasi, tidak menimpanya */
+
+/* Tombol KIRIM selalu terlihat di atas navigasi selama kartu transaksi masih panjang */
+.txn-card{ --pad:14px; }
+@media (min-width:64rem){ .txn-card{ --pad:20px; } }
+.txn-submit-wrap{
+  position:sticky; bottom:0; z-index:5;
+  margin:16px calc(-1 * var(--pad)) calc(-1 * var(--pad));
+  padding:12px var(--pad) var(--pad);
+  background:linear-gradient(to top, var(--card) 80%, rgba(255,255,255,0));
+  border-radius:0 0 var(--radius) var(--radius);
+}
+.txn-card.dark .txn-submit-wrap{ background:linear-gradient(to top, #1f1611 80%, rgba(31,22,17,0)); }
 </style>
