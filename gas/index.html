@@ -54,7 +54,10 @@
         <div class="brand">
           <div style="min-width:0;">
             <h1><svg class="brand-mark" aria-hidden="true"><use href="#appMark"/></svg>Barang Dapur</h1>
-            <div class="topbar-clock" id="topbarClock"></div>
+            <div class="topbar-sub">
+              <div class="topbar-clock" id="topbarClock"></div>
+              <span id="offlineBadge" class="offline-badge hidden" role="status">Offline</span>
+            </div>
           </div>
         </div>
         <div class="userbox">
@@ -75,18 +78,20 @@
 
       <!-- ===== VIEW: DASHBOARD ===== -->
       <div id="viewDashboard" class="view">
+        <div id="dashSummary" class="dash-summary ok" role="status"></div>
         <div class="dashboard-strip" id="stockStrip"></div>
-        <div class="section card howto-card">
-          <div class="section-head">
+        <details class="section card howto-card" id="howtoCard" open>
+          <summary class="section-head">
             <h3 class="section-title">Cara Pakai</h3>
-          </div>
+            <span class="howto-chevron" aria-hidden="true">▾</span>
+          </summary>
           <div class="howto-list">
             <div class="howto-item"><strong>✏️ Input</strong><span>catat stok masuk / keluar</span></div>
             <div class="howto-item"><strong>📦 Stok</strong><span>lihat detail per barang</span></div>
             <div class="howto-item"><strong>🕒 Riwayat</strong><span>lihat, edit & hapus transaksi</span></div>
             <div class="howto-item"><strong>📊 Laporan</strong><span>cetak laporan bulanan</span></div>
           </div>
-        </div>
+        </details>
       </div>
 
       <!-- ===== VIEW: INPUT BARANG ===== -->
@@ -129,7 +134,11 @@
               <div class="invoice-field-inner">
                 <label>📷 Upload Invoice (wajib)</label>
                 <input type="file" id="invoiceInput" accept="image/*" capture="environment" class="hidden" />
-                <button type="button" class="btn btn-secondary" id="invoicePickBtn" style="width:100%;">Ambil Foto Invoice</button>
+                <input type="file" id="invoiceGalleryInput" accept="image/*" class="hidden" />
+                <div class="invoice-pick-stack">
+                  <button type="button" class="btn btn-secondary" id="invoicePickBtn" style="width:100%;">Ambil Foto Invoice</button>
+                  <button type="button" class="btn btn-secondary" id="invoiceGalleryBtn" style="width:100%;">Pilih dari Galeri</button>
+                </div>
                 <div id="invoicePreviewWrap" class="invoice-preview hidden">
                   <img id="invoicePreview" alt="Preview invoice" />
                   <div id="invoiceInfo" class="subtle"></div>
@@ -164,7 +173,7 @@
         <div class="section card recent" style="margin-top:0;">
           <div class="section-head">
             <h3 class="section-title">Riwayat Transaksi</h3>
-            <span class="subtle">tahan untuk edit / hapus</span>
+            <span class="subtle">ketuk ⋯ untuk edit / hapus</span>
           </div>
           <div id="recentList" class="recent-list"></div>
           <button type="button" class="txn-toggle-btn hidden" id="riwayatToggleBtn">▼ Lihat Selengkapnya</button>

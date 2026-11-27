@@ -1275,4 +1275,58 @@ body{
   border-radius:0 0 var(--radius) var(--radius);
 }
 .txn-card.dark .txn-submit-wrap{ background:linear-gradient(to top, #1f1611 80%, rgba(31,22,17,0)); }
+
+/* ===== UX mobile-first tahap 2 (hasil audit): keterbacaan, tombol aksi, laporan, ringkasan dashboard ===== */
+/* Informasi penting minimal 12px (tabel laporan yang padat dikecualikan) */
+.nav-btn .nav-lbl{ font-size:.75rem; }
+@media (max-width:21rem){ .nav-btn .nav-lbl{ font-size:.6875rem; } }
+.strip-card .name, .strip-card .unit, .strip-card .hari-hint, .strip-card .status-label{ font-size:.75rem; }
+.stock-now, .edit-row .edit-proj, .txn-time-hint{ font-size:.75rem; }
+.stok-detail-card .right .lvl{ font-size:.75rem; }
+.recent-role-badge, .recent-susulan, .recent-edited, .minus-hint, .recent-action, .recent-day-hdr{ font-size:.75rem; }
+
+/* Header: penanda Offline menetap */
+.topbar-sub{ display:flex; align-items:center; gap:6px; margin-top:2px; min-width:0; }
+.topbar-sub .topbar-clock{ margin-top:0; min-width:0; }
+.offline-badge{ flex-shrink:0; font-size:.6875rem; font-weight:800; color:#fff; background:var(--kritis); border-radius:999px; padding:1px 8px; }
+
+/* Dashboard: ringkasan + "Cara Pakai" yang bisa ditutup */
+.dash-summary{ margin:0 0 10px; padding:10px 12px; border-radius:14px; border:1px solid; font-size:.8125rem; font-weight:700; line-height:1.35; }
+.dash-summary.ok{ background:#f1faf4; border-color:#bfe3c9; color:var(--aman); }
+.dash-summary.orange{ background:#fdf1e7; border-color:#f0c896; color:var(--menipis); }
+.dash-summary.danger{ background:#fdedec; border-color:#f0b3ae; color:var(--kritis); }
+details.howto-card > summary{ list-style:none; cursor:pointer; min-height:2.75rem; display:flex; align-items:center; justify-content:space-between; margin:0; }
+details.howto-card > summary::-webkit-details-marker{ display:none; }
+details.howto-card[open] > summary{ margin-bottom:6px; }
+.howto-chevron{ color:var(--muted); font-size:1rem; transition:transform .15s ease; }
+details.howto-card[open] .howto-chevron{ transform:rotate(180deg); }
+
+/* Tombol aksi eksplisit (selain tahan lama) */
+.recent-more{ border:0; background:transparent; color:var(--muted); font-size:1.25rem; font-weight:800; line-height:1; width:2.75rem; height:2.75rem; margin:-.5rem -.5rem -.5rem -.25rem; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; cursor:pointer; }
+.recent-more:active{ background:var(--primary-tint); }
+.stok-edit{ border:0; background:var(--primary-tint); color:var(--primary); width:2.75rem; height:2.75rem; border-radius:999px; font-size:1.0625rem; flex-shrink:0; cursor:pointer; }
+.stok-edit:active{ transform:scale(.94); }
+.stok-detail-card.stok-correctable::after{ content:none; }
+
+/* Foto invoice: kamera atau galeri */
+.invoice-pick-stack{ display:flex; flex-direction:column; gap:8px; }
+
+/* Laporan: kolom No. dan Nama Barang menempel saat tabel digeser ke samping */
+.report-table .c-no{ position:sticky; left:0; z-index:2; min-width:2.25rem; width:2.25rem; background:#fff; box-shadow:-16px 0 0 #fff; }  /* menutup gutter kiri saat digeser */
+.report-table .c-name{ position:sticky; left:2.25rem; z-index:2; background:#fff; box-shadow:1px 0 0 #ddd2c6; }
+.report-table th.c-no, .report-table th.c-name{ background:#f3e9df; }
+@media print{ .report-table .c-no, .report-table .c-name{ position:static; box-shadow:none; } }
+
+/* Hormati pengaturan "kurangi gerakan" (spinner tetap berputar karena menandakan proses) */
+@media (prefers-reduced-motion: reduce){
+  *, *::before, *::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }
+  .spin, .report-spinner, .btn-spinner{ animation:spin360 .9s linear infinite !important; animation-duration:.9s !important; animation-iteration-count:infinite !important; }
+}
+
+/* penyesuaian hasil ukur: kartu dashboard tidak memotong "WASPADA"; header >= 12px; offline di layar sangat sempit */
+.strip-card{ padding-left:.375rem; padding-right:.375rem; }
+.strip-card .status-label{ letter-spacing:0; }
+.topbar-clock{ font-size:.75rem; }
+.userinfo .line.role{ font-size:.75rem; }
+@media (max-width:24rem){ body.is-offline .topbar-clock{ display:none; } }   /* hanya penanda Offline yang tampil */
 </style>

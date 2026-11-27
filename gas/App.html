@@ -127,6 +127,11 @@ const txnTimeHint = document.getElementById('txnTimeHint');
 const invoiceField = document.getElementById('invoiceField');
 const invoiceInput = document.getElementById('invoiceInput');
 const invoicePickBtn = document.getElementById('invoicePickBtn');
+const invoiceGalleryInput = document.getElementById('invoiceGalleryInput');
+const invoiceGalleryBtn = document.getElementById('invoiceGalleryBtn');
+const dashSummary = document.getElementById('dashSummary');
+const howtoCard = document.getElementById('howtoCard');
+const offlineBadge = document.getElementById('offlineBadge');
 const invoicePreviewWrap = document.getElementById('invoicePreviewWrap');
 const invoicePreview = document.getElementById('invoicePreview');
 const invoiceInfo = document.getElementById('invoiceInfo');
@@ -389,6 +394,7 @@ function applyDemoRestrictions_() {
   demoBanner.classList.toggle('hidden', !readOnly);
   txnSubmitBtn.classList.toggle('hidden', readOnly);
   invoicePickBtn.disabled = readOnly;
+  invoiceGalleryBtn.disabled = readOnly;
   txnTimeToggleBtn.disabled = readOnly;
 }
 
@@ -416,12 +422,33 @@ function renderAll() {
 }
 
 // Render dashboard strip dengan fade halus (150-200ms), tanpa reload apa pun.
+// Dashboard mengurutkan yang paling mendesak (estimasi hari paling sedikit) di depan; urutan lain (Input/Stok) tetap menurut katalog.
+function renderDashSummary_() {
+  const flagged = { danger: [], orange: [] };
+  primaryItemOrder().forEach((key) => {
+    const lvl = hariLevel_(estimasiHari_(key, Number(state.stockReal[key] || 0))).cls;
+    if (flagged[lvl]) flagged[lvl].push(itemMeta[key].label);
+  });
+  const names = (list) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` +${list.length - 3} lain` : '');
+  let cls = 'ok', text = '✅ Semua stok aman';
+  if (flagged.danger.length) {
+    cls = 'danger';
+    text = `⚠️ ${flagged.danger.length} barang KRITIS: ${names(flagged.danger)}` + (flagged.orange.length ? ` • ${flagged.orange.length} menipis` : '');
+  } else if (flagged.orange.length) {
+    cls = 'orange';
+    text = `⚠️ ${flagged.orange.length} barang menipis: ${names(flagged.orange)}`;
+  }
+  dashSummary.className = `dash-summary ${cls}`;
+  dashSummary.textContent = text;
+}
+
 function renderStockStrip(withFade) {
+  renderDashSummary_();
   const cards = primaryItemOrder().map((key) => {
     const meta = itemMeta[key];
     const stock = Number(state.stockReal[key] || 0);
     return { key, label: meta.label, icon: meta.icon, stock };
-  });
+  }).sort((a, b) => estimasiHari_(a.key, a.stock) - estimasiHari_(b.key, b.stock)); // sort stabil: sama -> urutan katalog
 
   if (withFade) {
     Array.from(stockStrip.children).forEach((el) => el.classList.add('flash'));
@@ -502,7 +529,7 @@ function resetTxnState() {
   });
   syncPreviewToReal_();
   txnNoteInput.value = '';
-  invoiceInput.value = '';
+  clearInvoiceInputs_();
   invoicePreviewWrap.classList.add('hidden');
 }
 
@@ -629,7 +656,7 @@ function setMode(mode) {
     state.txInputs[k] = 0;
   });
   state.invoice = null;
-  invoiceInput.value = '';
+  clearInvoiceInputs_();
   invoicePreviewWrap.classList.add('hidden');
   renderTxnSection();
 }
@@ -709,9 +736,15 @@ function compressInvoice_(img, limitBytes) {
   return null;
 }
 
+function clearInvoiceInputs_() {
+  invoiceInput.value = '';
+  invoiceGalleryInput.value = '';
+}
+
 function setInvoiceBusy_(busy) {
   const readOnly = !!(state.user && state.user.canSubmit === false);
   invoicePickBtn.disabled = busy || readOnly;
+  invoiceGalleryBtn.disabled = busy || readOnly;
   invoicePickBtn.textContent = busy ? 'Memproses foto...' : 'Ambil Foto Invoice';
 }
 
@@ -723,7 +756,7 @@ function handleInvoiceFile(file) {
   const fail = (msg) => {
     setInvoiceBusy_(false);
     state.invoice = null;
-    invoiceInput.value = '';
+    clearInvoiceInputs_();
     invoicePreviewWrap.classList.add('hidden');
     renderTxnSection();
     showCenterNotice(msg);
@@ -1007,7 +1040,7 @@ function renderStokDetail() {
   const isAdmin = !!(state.user && String(state.user.role || '').toUpperCase() === 'ADMIN');
 
   if (stokSubtitle) {
-    stokSubtitle.textContent = isAdmin ? 'Tahan item untuk koreksi stok' : 'Sisa / Stok Tersedia';
+    stokSubtitle.textContent = isAdmin ? 'Ketuk ✎ untuk koreksi stok' : 'Sisa / Stok Tersedia';
   }
 
   stokDetailList.innerHTML = itemOrder.map((key) => {
@@ -1015,6 +1048,7 @@ function renderStokDetail() {
     const stock = Number(state.stockReal[key] || 0);
     const isSecondary = !!meta.isSecondary;
     const adminClass = isAdmin ? ' stok-correctable' : '';
+    const editBtn = isAdmin ? `<button type="button" class="stok-edit" data-key="${key}" aria-label="Koreksi stok ${escapeHtml(meta.label)}" title="Koreksi stok">✎</button>` : '';
 
     if (isSecondary) {
       return `
@@ -1028,6 +1062,7 @@ function renderStokDetail() {
             <div class="qty">${stock}</div>
             <div class="lvl">SECONDARY</div>
           </div>
+          ${editBtn}
         </div>
       `;
     }
@@ -1045,6 +1080,7 @@ function renderStokDetail() {
           <div class="qty">${stock}</div>
           <div class="lvl">${level.label}</div>
         </div>
+        ${editBtn}
       </div>
     `;
   }).join('');
@@ -1061,7 +1097,8 @@ function bindStokLongPress_(container) {
     let pressTimer = null;
     let triggered = false;
 
-    const start = () => {
+    const start = (e) => {
+      if (e && e.target && e.target.closest && e.target.closest('.stok-edit')) return;
       triggered = false;
       el.classList.add('pressing');
       pressTimer = setTimeout(() => {
@@ -1263,6 +1300,8 @@ function buildRecentHtml_(transactions, withGroupHeader) {
     const badges = isKoreksi
       ? `<span class="item-badge">${escapeHtml(tx.itemsText || '')}</span>`
       : buildItemBadges_(tx.itemsJson);
+    const canAct = !isKoreksi && state.user && state.user.canSubmit !== false && canManageTx_(tx);
+    const moreHtml = canAct ? '<button type="button" class="recent-more" aria-label="Aksi transaksi: edit atau hapus" title="Edit / hapus">⋯</button>' : '';
     const noteHtml = tx.note ? `<div class="recent-note">📝 ${escapeHtml(tx.note)}</div>` : '';
     const cameraHtml = isRestock && tx.invoiceUrl
       ? `<a href="${escapeHtml(tx.invoiceUrl)}" target="_blank" rel="noopener" class="recent-camera" aria-label="Lihat foto invoice" title="Lihat foto invoice">📷</a>`
@@ -1276,6 +1315,7 @@ function buildRecentHtml_(transactions, withGroupHeader) {
               ${tx.backdated ? '<span class="recent-susulan">SUSULAN</span>' : ''}
               ${tx.edited ? '<span class="recent-edited">DIEDIT</span>' : ''}
           <span class="recent-time">${formatJam_(date)}</span>
+          ${moreHtml}
         </div>
         <div class="recent-row2">
           <div class="recent-badges">${badges}</div>
@@ -1371,7 +1411,7 @@ function bindRecentLongPress(container) {
 
     const start = (e) => {
       // Jangan trigger long-press kalau menekan link invoice, atau saat akun read-only (Demo).
-      if (e.target.closest('a')) return;
+      if (e.target.closest('a') || e.target.closest('.recent-more')) return;
       if (state.user && state.user.canSubmit === false) return;
       triggered = false;
       el.classList.add('pressing');
@@ -1410,8 +1450,16 @@ function bindRecentLongPress(container) {
   });
 }
 
+// Salinan tampilan baris riwayat untuk popup, tanpa tombol aksi (⋯).
+function previewHtml_(el) {
+  if (!el) return '';
+  const c = el.cloneNode(true);
+  c.querySelectorAll('.recent-more').forEach((x) => x.remove());
+  return c.innerHTML;
+}
+
 function askDeleteTransaction(txId, el) {
-  const preview = el ? el.innerHTML : '';
+  const preview = previewHtml_(el);
 
   openModal(`
     <div style="display:flex; flex-direction:column; gap:10px;">
@@ -1490,7 +1538,7 @@ function openTxActions_(txId, el) {
     return;
   }
 
-  const preview = el ? el.innerHTML : '';
+  const preview = previewHtml_(el);
   openModal(`
     <div style="display:flex; flex-direction:column; gap:10px;">
       <div style="font-size:0.8125rem; background:#faf6f1; border-radius:12px; padding:10px 12px;">${preview}</div>
@@ -1745,8 +1793,8 @@ function buildReportHtml_(res) {
     )).join('');
     return `
       <tr>
-        <td>${idx + 1}</td>
-        <td class="nm-col">${escapeHtml(item.icon)} ${escapeHtml(item.label)}</td>
+        <td class="c-no">${idx + 1}</td>
+        <td class="nm-col c-name">${escapeHtml(item.icon)} ${escapeHtml(item.label)}</td>
         ${dailyCells}
         <td><strong>${item.usage}</strong></td>
       </tr>
@@ -1764,8 +1812,8 @@ function buildReportHtml_(res) {
       : (koreksi > 0 ? 'color:var(--aman); font-weight:800;' : 'color:var(--kritis); font-weight:800;');
     return `
       <tr>
-        <td>${idx + 1}</td>
-        <td class="nm-col">${escapeHtml(item.icon)} ${escapeHtml(item.label)}</td>
+        <td class="c-no">${idx + 1}</td>
+        <td class="nm-col c-name">${escapeHtml(item.icon)} ${escapeHtml(item.label)}</td>
         <td>${item.stokAwal}</td>
         <td>${item.tambahanStok}</td>
         <td>${item.usage}</td>
@@ -1803,7 +1851,7 @@ function buildReportHtml_(res) {
       <h4>Penggunaan Barang Dapur — ${monthName} ${res.year}</h4>
       <table class="report-table">
         <thead>
-          <tr><th rowspan="2">No.</th><th class="nm-col" rowspan="2">Nama Barang</th>${dateHeaderCells}<th rowspan="2">Total Usage</th></tr>
+          <tr><th class="c-no" rowspan="2">No.</th><th class="nm-col c-name" rowspan="2">Nama Barang</th>${dateHeaderCells}<th rowspan="2">Total Usage</th></tr>
           <tr>${dowHeaderCells}</tr>
         </thead>
         <tbody>${usageRows}</tbody>
@@ -1813,7 +1861,7 @@ function buildReportHtml_(res) {
       <table class="report-table report-summary-table">
         <thead>
           <tr>
-            <th>No.</th><th class="nm-col">Nama Barang</th><th>Stok Awal</th>
+            <th class="c-no">No.</th><th class="nm-col c-name">Nama Barang</th><th>Stok Awal</th>
             <th>Tambahan Stok (+)</th><th>Usage</th><th>Koreksi (±)</th><th>Sisa</th><th class="nm-col">Safety Stock</th>
           </tr>
         </thead>
@@ -1988,13 +2036,18 @@ function loadDashboard_(accessCode) {
 modeOutBtn.addEventListener('click', () => setMode('OUT'));
 modeInBtn.addEventListener('click', () => setMode('IN'));
 invoicePickBtn.addEventListener('click', () => invoiceInput.click());
+invoiceGalleryBtn.addEventListener('click', () => invoiceGalleryInput.click());
+invoiceGalleryInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  handleInvoiceFile(file);
+});
 invoiceInput.addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
   handleInvoiceFile(file);
 });
 invoiceRemoveBtn.addEventListener('click', () => {
   state.invoice = null;
-  invoiceInput.value = '';
+  clearInvoiceInputs_();
   invoicePreviewWrap.classList.add('hidden');
   renderTxnSection();
 });
@@ -2094,6 +2147,33 @@ window.addEventListener('bd:auth-expired', () => {
   if (appView.classList.contains('hidden')) return; // sudah di halaman login
   showLogin_();
   showToast('Sesi berakhir. Silakan masuk lagi.');
+});
+
+// Tombol aksi eksplisit (selain tahan lama): ⋯ di Riwayat, ✎ di Stok (Admin). Pendengar didelegasikan: daftar dirender ulang.
+recentList.addEventListener('click', (e) => {
+  const b = e.target.closest('.recent-more');
+  const item = b && b.closest('.recent-item');
+  if (item && item.dataset.txId) openTxActions_(item.dataset.txId, item);
+});
+stokDetailList.addEventListener('click', (e) => {
+  const b = e.target.closest('.stok-edit');
+  if (b && b.dataset.key) askCorrectStock_(b.dataset.key);
+});
+
+// Penanda "Offline" yang menetap di header (toast hanya sesaat).
+function syncOnlineBadge_() {
+  const off = navigator.onLine === false;
+  offlineBadge.classList.toggle('hidden', !off);
+  document.body.classList.toggle('is-offline', off);
+}
+window.addEventListener('online', syncOnlineBadge_);
+window.addEventListener('offline', syncOnlineBadge_);
+syncOnlineBadge_();
+
+// "Cara Pakai": ingat pilihan petugas (terbuka/tertutup).
+try { if (localStorage.getItem('bd.howto.v1') === 'closed') howtoCard.removeAttribute('open'); } catch (e) {}
+howtoCard.addEventListener('toggle', () => {
+  try { localStorage.setItem('bd.howto.v1', howtoCard.open ? 'open' : 'closed'); } catch (e) {}
 });
 
 updateTopbarClock_();
