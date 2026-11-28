@@ -1244,9 +1244,6 @@ body{
 .login-brand{ font-size:1.5rem; }
 .brand-mark{ width:1.5rem; height:1.5rem; vertical-align:-0.34rem; margin-right:.4rem; flex-shrink:0; }
 
-.resume-box{ margin-top:22px; display:flex; flex-direction:column; align-items:center; gap:12px; }
-.resume-text{ font-size:0.8438rem; color:var(--muted); line-height:1.45; padding:0 6px; }
-.resume-actions{ display:flex; flex-direction:column; align-items:center; gap:12px; width:100%; }
 
 /* ===== UX mobile-first (hasil audit): target sentuh >= 44px, input 16px, kontras, tombol KIRIM menempel, header ringkas ===== */
 .userinfo{ display:flex; flex-direction:column; align-items:flex-end; }
@@ -1320,7 +1317,7 @@ details.howto-card[open] .howto-chevron{ transform:rotate(180deg); }
 /* Hormati pengaturan "kurangi gerakan" (spinner tetap berputar karena menandakan proses) */
 @media (prefers-reduced-motion: reduce){
   *, *::before, *::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }
-  .spin, .report-spinner, .btn-spinner{ animation:spin360 .9s linear infinite !important; animation-duration:.9s !important; animation-iteration-count:infinite !important; }
+  .spin, .report-spinner, .btn-spinner, .startup-ring::before{ animation:spin360 .9s linear infinite !important; animation-duration:.9s !important; animation-iteration-count:infinite !important; }
 }
 
 /* penyesuaian hasil ukur: kartu dashboard tidak memotong "WASPADA"; header >= 12px; offline di layar sangat sempit */
@@ -1329,4 +1326,41 @@ details.howto-card[open] .howto-chevron{ transform:rotate(180deg); }
 .topbar-clock{ font-size:.75rem; }
 .userinfo .line.role{ font-size:.75rem; }
 @media (max-width:24rem){ body.is-offline .topbar-clock{ display:none; } }   /* hanya penanda Offline yang tampil */
+
+/* Menu Input: Transaksi Terbaru + badge BARU */
+.latest-card{ padding:14px; margin-top:14px; }
+.latest-card .section-head{ margin-bottom:4px; }
+.latest-card .small-link{ margin-right:-.75rem; }
+.recent-new{ flex-shrink:0; font-size:.75rem; font-weight:800; letter-spacing:.03em; color:#1f4fbf; background:#e8f0ff; border-radius:999px; padding:2px 8px; }
+
+/* ===== Alur startup: Splash -> Persiapan (spinner, status, progress bar) -> Beranda ===== */
+.startup-view{ position:fixed; inset:0; z-index:100; overflow:hidden; background:radial-gradient(120% 70% at 50% 0%, #f0e2d3 0%, var(--bg) 62%); transition:opacity .45s ease; }
+.startup-view.leaving{ opacity:0; pointer-events:none; }
+.startup-pane{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:1.5rem; transition:opacity .45s ease, transform .45s ease; }
+.startup-logo{ width:6rem; height:6rem; filter:drop-shadow(0 12px 22px rgba(111,68,40,.30)); animation:startupLogoIn .8s cubic-bezier(.2,.9,.25,1.15) both; }
+.startup-name{ margin-top:1.1rem; font-size:1.625rem; font-weight:800; letter-spacing:-.02em; animation:startupUp .6s .25s ease both; }
+.startup-tag{ margin-top:.375rem; font-size:.875rem; color:var(--muted); animation:startupUp .6s .45s ease both; }
+.startup-prep{ opacity:0; transform:translateY(10px); pointer-events:none; }
+.startup-view.prep .startup-splash{ opacity:0; transform:scale(.96); pointer-events:none; }
+.startup-view.prep .startup-prep{ opacity:1; transform:none; pointer-events:auto; }
+.startup-ring{ position:relative; width:5.5rem; height:5.5rem; display:flex; align-items:center; justify-content:center; }
+.startup-ring::before{ content:''; position:absolute; inset:0; border-radius:50%; border:4px solid #e8dccd; border-top-color:var(--primary); animation:spin360 .9s linear infinite; }
+.startup-ring-logo{ width:3.25rem; height:3.25rem; }
+.startup-title{ margin-top:1.4rem; font-size:1.125rem; font-weight:800; }
+.startup-status{ margin-top:.5rem; min-height:1.4em; max-width:20rem; font-size:.875rem; line-height:1.4; color:var(--muted); }
+.startup-pct{ margin-top:.25rem; font-size:.75rem; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
+.startup-retry{ margin-top:1.25rem; min-height:2.75rem; padding:0 2rem; border:0; border-radius:14px; background:var(--primary); color:#fff; font-size:.9375rem; font-weight:800; cursor:pointer; }
+.startup-retry:active{ transform:scale(.97); }
+.startup-view.error .startup-ring::before{ animation:none; border-color:#f0b3ae; }
+.startup-view.error .startup-title{ color:var(--kritis); }
+.startup-view.error .startup-pct{ display:none; }
+.startup-bar{ position:absolute; left:0; right:0; bottom:env(safe-area-inset-bottom, 0px); height:.3125rem; background:#eadfd2; opacity:0; transition:opacity .45s ease; overflow:hidden; }
+.startup-view.prep .startup-bar{ opacity:1; }
+.startup-bar-fill{ height:100%; width:100%; transform-origin:left; transform:scaleX(0); background:linear-gradient(90deg, var(--primary), #a86a3f); transition:transform .4s cubic-bezier(.3,.8,.3,1); }
+.startup-view.error .startup-bar-fill{ background:var(--kritis); }
+.startup-bar-shine{ display:none; position:absolute; top:0; bottom:0; left:0; width:35%; background:linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent); transform:translateX(-100%); }
+.startup-bar.waiting .startup-bar-shine{ display:block; animation:startupShine 1.2s ease-in-out infinite; }
+@keyframes startupLogoIn{ from{ opacity:0; transform:scale(.55) translateY(8px); } to{ opacity:1; transform:none; } }
+@keyframes startupUp{ from{ opacity:0; transform:translateY(10px); } to{ opacity:1; transform:none; } }
+@keyframes startupShine{ from{ transform:translateX(-100%); } to{ transform:translateX(300%); } }
 </style>

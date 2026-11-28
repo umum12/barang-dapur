@@ -29,6 +29,8 @@ const IDLE_MS = 30 * 60 * 1000;
 const INPUT_VISIBLE_COUNT = 4;
 // Jumlah transaksi Riwayat yang tampil sebelum "Lihat Selengkapnya" (backend mengirim seluruh transaksi bulan ini + bulan lalu).
 const RIWAYAT_VISIBLE_COUNT = 10;
+// Menu Input: dari transaksi terbaru yang dikirim server (jumlahnya diatur APP_CONFIG.LATEST_TX_COUNT), sekian teratas diberi badge BARU.
+const LATEST_NEW_COUNT = 2;
 
 // Divisor konsumsi harian per item, dipakai untuk estimasi hari (stok / divisor).
 const CONSUMPTION_DIVISOR = {}; // diisi dari backend (ITEMS.consumptionDivisor) lewat applyStocks_()
@@ -65,6 +67,8 @@ const state = {
   // Bahan snapshot (daftar stok mentah dari server) & penanda sedang menampilkan snapshot (kode akses tidak disimpan).
   stocksRaw: null,
   fromSnapshot: false,
+  // Transaksi terbaru untuk menu Input (null = server belum mengirim -> kartu disembunyikan). Tanpa kode akses.
+  latest: null,
   lastActivity: Date.now(),
   idleTimer: null,
   currentView: 'dashboard',
@@ -130,6 +134,9 @@ const invoicePickBtn = document.getElementById('invoicePickBtn');
 const invoiceGalleryInput = document.getElementById('invoiceGalleryInput');
 const invoiceGalleryBtn = document.getElementById('invoiceGalleryBtn');
 const dashSummary = document.getElementById('dashSummary');
+const latestCard = document.getElementById('latestCard');
+const latestList = document.getElementById('latestList');
+const latestAllBtn = document.getElementById('latestAllBtn');
 const howtoCard = document.getElementById('howtoCard');
 const offlineBadge = document.getElementById('offlineBadge');
 const invoicePreviewWrap = document.getElementById('invoicePreviewWrap');
@@ -151,14 +158,15 @@ const loginCodeInput = document.getElementById('loginCodeInput');
 const loginSubmitBtn = document.getElementById('loginSubmitBtn');
 const loginSubmitLabel = document.getElementById('loginSubmitLabel');
 const loginError = document.getElementById('loginError');
-const loginFormWrap = document.getElementById('loginFormWrap');
 const loginSessionHint = document.getElementById('loginSessionHint');
-const resumeBox = document.getElementById('resumeBox');
-const resumeSpinner = document.getElementById('resumeSpinner');
-const resumeText = document.getElementById('resumeText');
-const resumeActions = document.getElementById('resumeActions');
-const resumeRetryBtn = document.getElementById('resumeRetryBtn');
-const resumeOtherBtn = document.getElementById('resumeOtherBtn');
+const startupView = document.getElementById('startupView');
+const startupTitle = document.getElementById('startupTitle');
+const startupStatus = document.getElementById('startupStatus');
+const startupPct = document.getElementById('startupPct');
+const startupBar = document.getElementById('startupBar');
+const startupBarFill = document.getElementById('startupBarFill');
+const startupRetryBtn = document.getElementById('startupRetryBtn');
+const startupOtherBtn = document.getElementById('startupOtherBtn');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalTitle = document.getElementById('modalTitle');
 const modalBody = document.getElementById('modalBody');
@@ -311,6 +319,7 @@ function hydrateDashboard(data, opts) {
   state.user = data.user;
   resetRiwayat_(); // riwayat tidak ikut login; dimuat saat menu Riwayat dibuka
   applyStocks_(data.stocks);
+  state.latest = Array.isArray(data.terbaru) ? data.terbaru : null;
   state.riwayatExpanded = false;
   if (data.config) state.config = Object.assign({}, state.config, data.config);
   if (opts.keepInput) syncPreviewToReal_(); else resetTxnState(); // resetTxnState juga menyamakan stockPreview dengan stockReal
@@ -340,6 +349,7 @@ function persistSnapshot_() {
       t: Date.now(),
       user: { name: state.user.name, role: state.user.role, labelRole: state.user.labelRole, canSubmit: state.user.canSubmit },
       stocks: state.stocksRaw,
+      terbaru: state.latest, // sudah tanpa kode akses (disaring server)
       config: state.config
     }));
   } catch (e) { /* penyimpanan penuh/diblokir: abaikan */ }
@@ -362,7 +372,7 @@ function clearSnapshot_() {
 // Tampilkan snapshot seketika, lalu periksa sesi & muat data asli di belakang layar.
 function paintFromSnapshot_(snap) {
   showApp_();
-  hydrateDashboard({ user: snap.user, stocks: snap.stocks, config: snap.config }, { quiet: true });
+  hydrateDashboard({ user: snap.user, stocks: snap.stocks, terbaru: snap.terbaru, config: snap.config }, { quiet: true });
   state.fromSnapshot = true;
   setActivity();
 
@@ -419,6 +429,7 @@ function renderAll() {
   renderTxnSection();
   renderRecent();
   renderStokDetail();
+  renderLatest_();
 }
 
 // Render dashboard strip dengan fade halus (150-200ms), tanpa reload apa pun.
@@ -499,6 +510,7 @@ function refreshDashboard(silent) {
 
       invalidateRiwayat_();
       applyStocks_(res.stocks);
+      if (Array.isArray(res.terbaru)) state.latest = res.terbaru;
       persistSnapshot_();
       state.fromSnapshot = false;
       syncPreviewToReal_();
@@ -506,6 +518,7 @@ function refreshDashboard(silent) {
       renderTxnSection();
       renderRecent();
       renderStokDetail();
+      renderLatest_();
       if (state.currentView === 'riwayat') loadRiwayat_(); // sedang melihat Riwayat -> muat ulang
       if (!silent) showCenterNotice('Data diperbarui');
     })
@@ -879,11 +892,13 @@ function applyServerResult_(res) {
     invalidateRiwayat_();
   }
   applyStocks_(res.stocks);
+  if (Array.isArray(res.terbaru)) state.latest = res.terbaru;
   persistSnapshot_();
   syncPreviewToReal_();
   renderStockStrip(true);
   renderRecent();
   renderStokDetail();
+  renderLatest_();
 }
 
 function applyTxnResult(res) {
@@ -1264,7 +1279,9 @@ function buildItemBadges_(itemsJson) {
     .join('');
 }
 
-function buildRecentHtml_(transactions, withGroupHeader) {
+// opts: { noActions: tanpa tombol ⋯, showDate: tampilkan tanggal bila bukan hari ini, newCount: n teratas diberi badge BARU }
+function buildRecentHtml_(transactions, withGroupHeader, opts) {
+  opts = opts || {};
   if (!transactions.length) {
     return '<div class="summary-empty"><span class="empty-ico">🗒️</span><span>Belum ada transaksi.</span></div>';
   }
@@ -1273,7 +1290,7 @@ function buildRecentHtml_(transactions, withGroupHeader) {
   let lastGroupKey = null;
   let groupIdx = -1;
 
-  transactions.forEach((tx) => {
+  transactions.forEach((tx, idx) => {
     const date = parseTxTimestamp_(tx.timestamp) || new Date();
 
     if (withGroupHeader) {
@@ -1300,8 +1317,12 @@ function buildRecentHtml_(transactions, withGroupHeader) {
     const badges = isKoreksi
       ? `<span class="item-badge">${escapeHtml(tx.itemsText || '')}</span>`
       : buildItemBadges_(tx.itemsJson);
-    const canAct = !isKoreksi && state.user && state.user.canSubmit !== false && canManageTx_(tx);
+    const canAct = !opts.noActions && !isKoreksi && state.user && state.user.canSubmit !== false && canManageTx_(tx);
     const moreHtml = canAct ? '<button type="button" class="recent-more" aria-label="Aksi transaksi: edit atau hapus" title="Edit / hapus">⋯</button>' : '';
+    const newHtml = idx < (opts.newCount || 0) ? '<span class="recent-new">BARU</span>' : '';
+    const timeLabel = opts.showDate && !isSameDay_(date, new Date())
+      ? `${date.getDate()} ${BULAN_ID[date.getMonth() + 1]} ${formatJam_(date)}`
+      : formatJam_(date);
     const noteHtml = tx.note ? `<div class="recent-note">📝 ${escapeHtml(tx.note)}</div>` : '';
     const cameraHtml = isRestock && tx.invoiceUrl
       ? `<a href="${escapeHtml(tx.invoiceUrl)}" target="_blank" rel="noopener" class="recent-camera" aria-label="Lihat foto invoice" title="Lihat foto invoice">📷</a>`
@@ -1312,9 +1333,10 @@ function buildRecentHtml_(transactions, withGroupHeader) {
         <div class="recent-row1">
           <span class="recent-name">${escapeHtml(tx.userName || tx.userCode || '')}</span>
           <span class="recent-role-badge">${escapeHtml(tx.role || '')}</span>
+          ${newHtml}
               ${tx.backdated ? '<span class="recent-susulan">SUSULAN</span>' : ''}
               ${tx.edited ? '<span class="recent-edited">DIEDIT</span>' : ''}
-          <span class="recent-time">${formatJam_(date)}</span>
+          <span class="recent-time">${timeLabel}</span>
           ${moreHtml}
         </div>
         <div class="recent-row2">
@@ -1401,6 +1423,14 @@ function renderRecent() {
   riwayatToggleBtn.textContent = state.riwayatExpanded
     ? '▲ Sembunyikan Item'
     : `▼ Lihat Selengkapnya (${all.length - RIWAYAT_VISIBLE_COUNT} lagi)`;
+}
+
+// Kartu "Transaksi Terbaru" di menu Input. Hanya tampilan: aksi edit/hapus tetap di menu Riwayat.
+function renderLatest_() {
+  if (!latestCard) return;
+  if (!Array.isArray(state.latest)) { latestCard.classList.add('hidden'); return; }
+  latestCard.classList.remove('hidden');
+  latestList.innerHTML = buildRecentHtml_(state.latest, false, { noActions: true, showDate: true, newCount: LATEST_NEW_COUNT });
 }
 
 function bindRecentLongPress(container) {
@@ -1903,6 +1933,7 @@ function init() {
   if (DEVELOPMENT_MODE) {
     // BYPASS LOGIN (Development Mode): langsung masuk Dashboard sebagai Admin.
     // Login screen tidak ditampilkan. Session dianggap selalu aktif.
+    startupHideNow_();
     showApp_();
     loadDashboard_(DEFAULT_ACCESS_CODE);
     setActivity();
@@ -1910,70 +1941,182 @@ function init() {
     return;
   }
 
-  // DEVELOPMENT_MODE = false -> login screen kode akses ditampilkan dahulu.
+  // Versi GitHub Pages: alur startup Splash -> Persiapan -> Beranda (sesi tersimpan dipulihkan di dalamnya).
+  if (isPersistentSession_()) { runStartup_(); return; }
+
+  // Versi GAS: tanpa alur startup (halaman dimuat Google); login screen kode akses ditampilkan dahulu.
   // loadDashboard_(kodeAksesUser) baru dipanggil setelah login() backend sukses.
-  if (isPersistentSession_()) {
-    loginSessionHint.textContent = 'Anda tetap masuk sampai menekan tombol keluar.';
-    // Ada sesi tersimpan: layar login menampilkan "memeriksa sesi", server memeriksa kode akses petugas,
-    // lalu langsung masuk. Hanya bila sesi ditolak server, formulir kode akses ditampilkan.
-    if (window.BD_API.hasSession()) {
-      const snap = loadSnapshot_();
-      if (snap) paintFromSnapshot_(snap); else resumeSession_();
-      return;
-    }
-  }
+  startupHideNow_();
   showLogin_();
 }
 
-// Mode isi kartu login: 'form' = formulir kode akses, 'loading' = memeriksa sesi, 'error' = gagal terhubung (bisa coba lagi).
-function setLoginMode_(mode, msg) {
-  loginFormWrap.classList.toggle('hidden', mode !== 'form');
-  resumeBox.classList.toggle('hidden', mode === 'form');
-  resumeSpinner.classList.toggle('hidden', mode !== 'loading');
-  resumeActions.classList.toggle('hidden', mode !== 'error');
-  if (mode === 'loading') resumeText.textContent = 'Memeriksa sesi dan menghubungkan ke server...';
-  if (mode === 'error') resumeText.textContent = msg || 'Tidak dapat terhubung ke server.';
+// ===== ALUR STARTUP (versi Pages): Splash -> Persiapan (spinner + status + progress bar) -> Beranda =====
+// Progress bar mengikuti proses SEBENARNYA: tiap tonggak terisi saat langkahnya benar-benar selesai (tidak pernah mundur):
+//   8% aplikasi siap -> 14% sesi diperiksa -> [data tersimpan dimuat 40% | permintaan ke server dikirim 30% -> jawaban diterima 70%]
+//   -> tampilan disusun 90-92% -> 100% siap. Selama menunggu server, kilau di bar menandakan "sedang menunggu" (bukan persen palsu).
+// Waktu minimum supaya animasi sempat terlihat dapat disetel dengan window.BD_STARTUP = { splashMs, prepMinMs, coldHintMs }
+// sebelum app.js dimuat (mis. di config.js). Diisi 0 untuk tanpa jeda.
+const STARTUP_CFG = Object.assign({ splashMs: 800, prepMinMs: 600, coldHintMs: 5000 }, window.BD_STARTUP || {});
+const STARTUP_INSTANT = STARTUP_CFG.splashMs === 0 && STARTUP_CFG.prepMinMs === 0;
+const startup = { pct: 0, prepShownAt: 0, coldTimer: null, retry: null, resolve: null };
+
+function startupSet_(pct, text) {
+  if (pct > startup.pct) startup.pct = pct; // monoton: bar tidak pernah mundur
+  startupBarFill.style.transform = `scaleX(${startup.pct / 100})`;
+  startupBar.setAttribute('aria-valuenow', String(Math.round(startup.pct)));
+  startupPct.textContent = `${Math.round(startup.pct)}%`;
+  if (text) startupStatus.textContent = text;
 }
 
-// Buka aplikasi dengan sesi tersimpan. getDashboard memakai identitas dari token di server (kode kiriman klien diabaikan),
-// jadi kode petugas yang sudah dihapus / sesi yang dicabut langsung ditolak (AUTH). Gangguan jaringan TIDAK menghapus sesi.
-function resumeSession_() {
-  appView.classList.add('hidden');
-  loginView.classList.remove('hidden');
-  loginError.classList.add('hidden');
-  setLoginMode_('loading');
+function startupMode_(mode) { // 'loading' | 'error'
+  const err = mode === 'error';
+  startupView.classList.toggle('error', err);
+  startupView.setAttribute('aria-busy', String(!err));
+  startupRetryBtn.classList.toggle('hidden', !err);
+  startupOtherBtn.classList.toggle('hidden', !err);
+  startupTitle.textContent = err ? 'Gagal Memuat Data' : 'Mempersiapkan Aplikasi...';
+}
 
-  google.script.run
-    .withSuccessHandler((res) => {
-      if (!res || !res.ok) { showLogin_(); return; }
-      showApp_();
-      hydrateDashboard(res);
-      setActivity();
-    })
-    .withFailureHandler((err) => {
-      if (err && err.code === 'AUTH') {
+function startupShowPrep_() {
+  startupView.classList.add('prep');
+  startup.prepShownAt = Date.now();
+}
+
+function startupError_(msg, retryFn) {
+  startup.retry = retryFn;
+  startupMode_('error');
+  startupStatus.textContent = msg;
+}
+
+function startupWaiting_(on) {
+  clearTimeout(startup.coldTimer);
+  startupBar.classList.remove('waiting');
+  if (!on) return;
+  startup.coldTimer = setTimeout(() => {
+    startupBar.classList.add('waiting');
+    startupStatus.textContent = 'Server sedang disiapkan, mohon tunggu...';
+  }, STARTUP_CFG.coldHintMs);
+}
+
+// Sembunyikan tanpa animasi (versi GAS / mode pengembangan).
+function startupHideNow_() {
+  startupView.classList.add('hidden');
+  loginView.removeAttribute('inert');
+  appView.removeAttribute('inert');
+}
+
+// Selesai: tunggu waktu minimum layar persiapan, isi bar sampai 100%, lalu transisi halus ke beranda (atau ke login bila belum masuk).
+function startupFinish_() {
+  const wait = Math.max(0, startup.prepShownAt + STARTUP_CFG.prepMinMs - Date.now());
+  setTimeout(() => {
+    startupSet_(100, 'Siap');
+    setTimeout(() => {
+      // Mulai memudar: beranda sudah bisa diketuk selama pemudaran (overlay tidak menangkap sentuhan).
+      startupView.classList.add('leaving');
+      loginView.removeAttribute('inert');
+      appView.removeAttribute('inert');
+      setTimeout(() => {
+        startupHideNow_();
+        if (!loginView.classList.contains('hidden')) loginCodeInput.focus();
+      }, STARTUP_INSTANT ? 0 : 450);
+    }, STARTUP_INSTANT ? 0 : 250);
+  }, wait);
+}
+
+// Pemuatan nyata. Menyelesaikan Promise saat tujuan siap (beranda atau login). Kegagalan jaringan menampilkan error + coba lagi.
+function startupLoad_() {
+  return new Promise((resolve) => {
+    startup.resolve = resolve;
+    loginSessionHint.textContent = 'Anda tetap masuk sampai menekan tombol keluar.';
+
+    const attempt = () => {
+      startupMode_('loading');
+      startupSet_(14, 'Memeriksa sesi...');
+
+      if (!window.BD_API.hasSession()) {            // belum masuk -> siapkan halaman login
+        startupSet_(60, 'Menyiapkan halaman masuk...');
         showLogin_();
-        loginError.textContent = 'Sesi berakhir. Silakan masuk lagi.';
-        loginError.classList.remove('hidden');
+        startupSet_(90, 'Menyiapkan halaman masuk...');
+        resolve();
         return;
       }
-      setLoginMode_('error', err && err.message ? err.message : 'Tidak dapat terhubung ke server.');
-    })
-    .getDashboard('');
+
+      const snap = loadSnapshot_();
+      if (snap) {                                    // data tersimpan: beranda langsung disusun; data asli menyusul di belakang layar
+        startupSet_(40, 'Memuat data tersimpan...');
+        paintFromSnapshot_(snap);
+        startupSet_(90, 'Menyiapkan tampilan...');
+        resolve();
+        return;
+      }
+
+      // Tanpa data tersimpan: tunggu server. getDashboard memakai identitas dari token di server (kode kiriman klien diabaikan),
+      // jadi sesi yang dicabut / kode yang dihapus ditolak (AUTH). Gangguan jaringan TIDAK menghapus sesi.
+      startupSet_(30, 'Menghubungkan ke server...');
+      startupWaiting_(true);
+      google.script.run
+        .withSuccessHandler((res) => {
+          startupWaiting_(false);
+          if (!res || !res.ok) { showLogin_(); resolve(); return; }
+          startupSet_(70, 'Data diterima...');
+          showApp_();
+          hydrateDashboard(res, { quiet: true });
+          setActivity();
+          startupSet_(92, 'Menyiapkan tampilan...');
+          resolve();
+        })
+        .withFailureHandler((err) => {
+          startupWaiting_(false);
+          if (err && err.code === 'AUTH') {
+            showLogin_();
+            loginError.textContent = 'Sesi berakhir. Silakan masuk lagi.';
+            loginError.classList.remove('hidden');
+            resolve();
+            return;
+          }
+          startupError_(err && err.message ? err.message : 'Tidak dapat terhubung ke server.', attempt);
+        })
+        .getDashboard('');
+    };
+    attempt();
+  });
 }
+
+function runStartup_() {
+  loginView.setAttribute('inert', '');   // selama startup, isi di balik layar tidak bisa difokus/diketuk
+  appView.setAttribute('inert', '');
+  startupSet_(8, 'Menyiapkan aplikasi...');
+  const splash = new Promise((r) => setTimeout(r, STARTUP_CFG.splashMs)).then(startupShowPrep_);
+  startupLoad_().then(() => splash).then(startupFinish_);
+}
+
+startupRetryBtn.addEventListener('click', () => {
+  const f = startup.retry;
+  startup.retry = null;
+  if (f) f();
+});
+startupOtherBtn.addEventListener('click', () => { // sesi tersimpan dicabut; formulir kode akses ditampilkan
+  startup.retry = null;
+  startupMode_('loading');
+  showLogin_();
+  startupSet_(90, 'Menyiapkan halaman masuk...');
+  if (startup.resolve) startup.resolve();
+});
 
 function showLogin_() {
   stopIdleWatcher();
   clearSnapshot_();
   state.fromSnapshot = false;
+  state.latest = null;
+  if (latestList) latestList.innerHTML = '';
   // Versi GitHub Pages: api-shim.js memasang kait ini untuk mencabut token sesi di server. Di GAS tidak ada -> tidak terjadi apa-apa.
   if (typeof window.onBdSessionEnd === 'function') window.onBdSessionEnd();
   appView.classList.add('hidden');
   loginView.classList.remove('hidden');
   loginError.classList.add('hidden');
-  setLoginMode_('form');
   loginCodeInput.value = '';
-  setTimeout(() => loginCodeInput.focus(), 50);
+  // Selama layar startup menutupi, jangan fokus ke kolom kode (keyboard HP akan muncul di balik splash); fokus diberikan saat startup selesai.
+  setTimeout(() => { if (startupView.classList.contains('hidden')) loginCodeInput.focus(); }, 50);
 }
 
 function showApp_() {
@@ -2035,6 +2178,7 @@ function loadDashboard_(accessCode) {
 
 modeOutBtn.addEventListener('click', () => setMode('OUT'));
 modeInBtn.addEventListener('click', () => setMode('IN'));
+latestAllBtn.addEventListener('click', () => switchView('riwayat'));
 invoicePickBtn.addEventListener('click', () => invoiceInput.click());
 invoiceGalleryBtn.addEventListener('click', () => invoiceGalleryInput.click());
 invoiceGalleryInput.addEventListener('change', (e) => {
@@ -2081,8 +2225,6 @@ loginCodeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') attemptLogin_();
 });
 loginSubmitBtn.addEventListener('click', attemptLogin_);
-resumeRetryBtn.addEventListener('click', resumeSession_);
-resumeOtherBtn.addEventListener('click', showLogin_); // sesi tersimpan dicabut, lalu formulir kode akses tampil
 // Setelah long-press, browser sentuh bisa mengirim klik susulan ke titik jari yang sama --
 // yang kini sudah tertutup modal (menutup popup / menekan tombol tanpa disengaja). Abaikan 0,5 dtk pertama.
 modalBackdrop.addEventListener('click', (e) => {

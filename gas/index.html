@@ -22,6 +22,27 @@
       </symbol>
     </defs>
   </svg>
+  <!-- Alur startup (versi Pages): Splash -> Persiapan -> Beranda. Tampil sejak cetakan pertama; disembunyikan oleh App.html. -->
+  <div id="startupView" class="startup-view" aria-busy="true" aria-label="Memuat aplikasi">
+    <div class="startup-pane startup-splash" id="startupSplash">
+      <svg class="startup-logo" aria-hidden="true"><use href="#appMark"/></svg>
+      <div class="startup-name">Barang Dapur</div>
+      <div class="startup-tag">Pantau &amp; catat stok barang dapur</div>
+    </div>
+    <div class="startup-pane startup-prep" id="startupPrep">
+      <div class="startup-ring"><svg class="startup-ring-logo" aria-hidden="true"><use href="#appMark"/></svg></div>
+      <div class="startup-title" id="startupTitle">Mempersiapkan Aplikasi...</div>
+      <div class="startup-status" id="startupStatus" role="status" aria-live="polite">Menyiapkan aplikasi...</div>
+      <div class="startup-pct" id="startupPct" aria-hidden="true">0%</div>
+      <button type="button" class="startup-retry hidden" id="startupRetryBtn">Coba Lagi</button>
+      <button type="button" class="small-link hidden" id="startupOtherBtn">Masuk dengan kode lain</button>
+    </div>
+    <div class="startup-bar" id="startupBar" role="progressbar" aria-label="Kemajuan memuat aplikasi" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="startup-bar-fill" id="startupBarFill"></div>
+      <div class="startup-bar-shine"></div>
+    </div>
+  </div>
+
   <div id="loginView" class="login-view">
     <div class="login-card">
       <div class="login-logo"><svg class="login-logo-svg" role="img" aria-label="Barang Dapur"><use href="#appMark"/></svg></div>
@@ -36,14 +57,6 @@
         <button id="loginSubmitBtn" class="login-submit-btn"><span id="loginSubmitLabel">MASUK</span></button>
         <div id="loginSessionHint" class="login-session-hint">Sesi berakhir otomatis setelah 30 menit tidak ada aktivitas.</div>
         <div class="login-demo-hint">Ingin mencoba? Ketik <strong>DEMO</strong> untuk masuk.</div>
-      </div>
-      <div id="resumeBox" class="resume-box hidden">
-        <div id="resumeSpinner" class="report-spinner"></div>
-        <div id="resumeText" class="resume-text"></div>
-        <div id="resumeActions" class="resume-actions hidden">
-          <button type="button" id="resumeRetryBtn" class="login-submit-btn">COBA LAGI</button>
-          <button type="button" id="resumeOtherBtn" class="small-link">Masuk dengan kode lain</button>
-        </div>
       </div>
     </div>
   </div>
@@ -154,6 +167,15 @@
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- Transaksi terakhir yang dicatat (jumlah ditentukan server: APP_CONFIG.LATEST_TX_COUNT); 2 teratas diberi badge BARU -->
+        <div class="section card latest-card hidden" id="latestCard">
+          <div class="section-head">
+            <h3 class="section-title">Transaksi Terbaru</h3>
+            <button type="button" class="small-link" id="latestAllBtn">Lihat semua →</button>
+          </div>
+          <div id="latestList" class="recent-list"></div>
         </div>
       </div>
 
